@@ -1,0 +1,285 @@
+Metadata-Version: 2.4
+Name: radreport-parser
+Version: 0.1.0
+Summary: Parse, structure, and export radiology free-text reports to FHIR
+License: MIT
+Project-URL: Homepage, https://github.com/yourorg/radreport-parser
+Project-URL: Documentation, https://github.com/yourorg/radreport-parser#readme
+Project-URL: Issues, https://github.com/yourorg/radreport-parser/issues
+Keywords: radiology,DICOM,FHIR,medical imaging,healthcare,NLP
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Healthcare Industry
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Scientific/Engineering :: Medical Science Apps.
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-cov; extra == "dev"
+
+# radreport-parser
+
+**Parse radiology free-text reports into structured data. No ML. No GPU. No dependencies.**
+
+[![PyPI version](https://badge.fury.io/py/radreport-parser.svg)](https://badge.fury.io/py/radreport-parser)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+Radiology reports come out as free-text PDFs. Downstream systems — EMRs, telehealth portals, billing platforms — need structured data. This library bridges that gap.
+
+Three things it does well:
+
+1. **Parse** — splits any free-text report into labeled sections, extracts measurements, links findings to anatomy
+2. **Detect** — flags critical/urgent findings with negation awareness (no false alerts for "no pneumothorax")
+3. **Export** — outputs FHIR R4 DiagnosticReport resources ready for any EMR
+
+---
+
+## Install
+
+```bash
+pip install radreport-parser
+```
+
+Zero required dependencies. Works on Python 3.9+.
+
+---
+
+## Quick Start
+
+```python
+from radreport_parser import ReportParser, CriticalFindingsDetector, FHIRExporter
+import json
+
+report_text = """
+INDICATION: Chest pain, rule out PE.
+
+FINDINGS:
+Lungs: Filling defect in the right main pulmonary artery consistent with
+pulmonary embolism. No pneumothorax.
+
+IMPRESSION:
+Pulmonary embolism, right main pulmonary artery. Urgent correlation recommended.
+"""
+
+# 1. Parse
+parser = ReportParser()
+report = parser.parse(report_text, modality="CT")
+
+print(report.impression)
+# → "Pulmonary embolism, right main pulmonary artery. Urgent correlation recommended."
+
+# 2. Detect critical findings
+detector = CriticalFindingsDetector()
+report = detector.detect(report)
+
+for cf in report.critical_findings:
+    if not cf.negated:
+        print(f"[{cf.severity.upper()}] {cf.term} ({cf.category})")
+        print(f"  Context: {cf.context}")
+# → [CRITICAL] pulmonary embolism (pulmonary)
+#     Context: Filling defect in the right main pulmonary artery consistent with pulmonary embolism.
+
+# 3. Export to FHIR
+exporter = FHIRExporter()
+fhir = exporter.export(report, patient_id="pt-001")
+print(json.dumps(fhir, indent=2))
+```
+
+---
+
+## Parsing
+
+### Sections
+
+The parser recognizes standard radiology report sections regardless of formatting style:
+
+| Section key      | Matched headers |
+|------------------|-----------------|
+| `indication`     | Indication, Clinical Indication, History, Reason for Exam |
+| `technique`      | Technique, Procedure, Protocol |
+| `comparison`     | Comparison, Prior Study, Previous |
+| `findings`       | Findings, Observations |
+| `impression`     | Impression, Conclusion, Assessment, Diagnosis |
+| `recommendation` | Recommendation, Follow-up, Advised |
+
+```python
+report = parser.parse(text, modality="MRI")
+
+findings = report.get_section("findings")
+print(findings.raw_text)
+
+impression = report.get_section("impression")
+print(impression.raw_text)
+```
+
+### Measurements
+
+All measurements are extracted and normalized to millimeters:
+
+```python
+for m in report.all_measurements:
+    print(f"  Raw: {m.raw}")
+    print(f"  Normalized (mm): {m.dimensions_mm}")
+    print(f"  Largest dimension: {m.largest_dimension_mm} mm")
+
+# Raw: 2.3 x 1.8 cm
+# Normalized (mm): [23.0, 18.0]
+# Largest dimension: 23.0 mm
+```
+
+Handles: `1.2 x 0.8 cm`, `12mm`, `1.2cm`, `12 x 8 x 5 mm`, `1.2 x 0.8 x 0.5 cm`
+
+### Findings by anatomy
+
+```python
+findings_section = report.get_section("findings")
+for finding in findings_section.findings:
+    print(f"Anatomy: {finding.anatomy or 'unspecified'}")
+    print(f"Text: {finding.text}")
+```
+
+---
+
+## Critical Findings Detection
+
+Rule-based. Fully auditable. No black boxes.
+
+Covers 45+ terms across 8 categories:
+
+| Category    | Examples |
+|-------------|----------|
+| `vascular`  | aortic dissection, DVT, aortic aneurysm |
+| `pulmonary` | pulmonary embolism, pneumothorax, hemothorax |
+| `neuro`     | subdural hematoma, midline shift, intracranial hemorrhage |
+| `abdominal` | free air, bowel perforation, appendicitis |
+| `cardiac`   | cardiac tamponade, pericardial effusion |
+| `spinal`    | cord compression, cervical fracture |
+| `oncologic` | malignancy, metastasis, carcinoma |
+
+### Negation awareness
+
+```python
+# "No pneumothorax identified" → negated=True, won't trigger alert
+# "Pneumothorax present" → negated=False, triggers alert
+
+active = [cf for cf in report.critical_findings if not cf.negated]
+```
+
+### Severity levels
+
+- `critical` — requires immediate action (PE, subdural hematoma, pneumothorax)
+- `urgent` — requires same-day follow-up (DVT, bowel obstruction, appendicitis)
+- `significant` — requires follow-up (malignancy, metastasis)
+
+### Extending the term list
+
+```python
+from radreport_parser.detectors.critical_findings import CRITICAL_TERMS
+
+# Add your own terms
+CRITICAL_TERMS["tension pneumothorax"] = ("pulmonary", "critical")
+CRITICAL_TERMS["septic emboli"] = ("vascular", "urgent")
+```
+
+---
+
+## FHIR Export
+
+Outputs a valid FHIR R4 `DiagnosticReport` resource.
+
+```python
+from datetime import datetime
+
+fhir = exporter.export(
+    report,
+    patient_id="pt-001",       # Optional: links to FHIR Patient resource
+    report_id="rpt-20240315",   # Optional: custom resource ID
+    issued_dt=datetime.now(),   # Optional: defaults to UTC now
+)
+```
+
+### What's included
+
+- `resourceType`: `DiagnosticReport`
+- `status`: `final`
+- `code`: LOINC code matched to modality (CT, MRI, US, etc.)
+- `conclusion`: impression text
+- `presentedForm`: full report text as base64 attachment
+- `contained`: FHIR Observations for each active (non-negated) critical finding
+- `extension`: structured sections for downstream parsing
+- `subject`: patient reference (when `patient_id` provided)
+
+---
+
+## Full Pipeline Example
+
+```python
+import json
+from radreport_parser import ReportParser, CriticalFindingsDetector, FHIRExporter
+
+parser   = ReportParser()
+detector = CriticalFindingsDetector()
+exporter = FHIRExporter()
+
+def process_report(text: str, modality: str, patient_id: str) -> dict:
+    report = parser.parse(text, modality=modality)
+    report = detector.detect(report)
+
+    active_criticals = [cf for cf in report.critical_findings if not cf.negated]
+    if active_criticals:
+        print(f"⚠️  {len(active_criticals)} critical finding(s) detected")
+
+    return exporter.export(report, patient_id=patient_id)
+
+fhir_json = process_report(report_text, modality="CT", patient_id="pt-001")
+print(json.dumps(fhir_json, indent=2))
+```
+
+---
+
+## Design Principles
+
+**No dependencies.** The library installs with no third-party packages. This matters in hospital environments where every dependency goes through security review.
+
+**Rule-based, not ML-based.** Every decision the library makes is traceable to a specific rule. No model weights, no GPU, no probabilistic outputs. Clinical teams can audit exactly why a finding was flagged.
+
+**Negation-aware.** A library that can't distinguish "no pneumothorax" from "pneumothorax" is dangerous in clinical contexts. Negation detection is built into the core.
+
+**FHIR-first output.** Every modern EMR speaks FHIR. The export format is designed to drop into existing integrations without transformation.
+
+---
+
+## Running Tests
+
+```bash
+pip install radreport-parser[dev]
+pytest tests/ -v
+```
+
+---
+
+## Roadmap
+
+- [ ] Template matching for common report types (Chest XR, CT Abdomen, MRI Brain)
+- [ ] Structured output for follow-up recommendations
+- [ ] Additional FHIR resource types (ImagingStudy, Condition)
+- [ ] CLI tool for batch processing
+
+---
+
+## Disclaimer
+
+This library is a developer tool for structuring report text. It is **not** a medical device and is **not** intended for direct clinical decision-making. Critical findings detection is designed to assist human review workflows, not replace radiologist judgment.
+
+---
+
+## License
+
+MIT

@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "radreport-parser"
+version = "0.1.0"
+description = "Parse, structure, and export radiology free-text reports to FHIR"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = ["radiology", "DICOM", "FHIR", "medical imaging", "healthcare", "NLP"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Healthcare Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+
+# Zero required dependencies — runs anywhere, passes any hospital IT review
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov"]
+
+[project.urls]
+Homepage = "https://github.com/yourorg/radreport-parser"
+Documentation = "https://github.com/yourorg/radreport-parser#readme"
+Issues = "https://github.com/yourorg/radreport-parser/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["radreport_parser*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
