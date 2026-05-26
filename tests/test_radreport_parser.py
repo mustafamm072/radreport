@@ -5,7 +5,7 @@ Run with: pytest tests/ -v
 
 import pytest
 
-from radreport_parser import ReportParser, CriticalFindingsDetector, FHIRExporter
+from radreport_parser import ReportParser, CriticalFindingsDetector, FHIRExporter, RecommendationExtractor
 
 # ---------------------------------------------------------------------------
 # Sample reports for testing
@@ -450,3 +450,223 @@ class TestCLI:
         assert buf.getvalue() == ""
         result = json.loads(Path(out).read_text())
         assert "sections" in result
+
+    def test_cli_recommend_flag(self):
+        import json
+        from io import StringIO
+        from contextlib import redirect_stdout
+        from radreport_parser.cli import main
+
+        f = self._write_report("report.txt", CT_CHEST_REPORT)
+        buf = StringIO()
+        with redirect_stdout(buf):
+            main([f, "--recommend"])
+        result = json.loads(buf.getvalue())
+        assert "recommendations" in result
+
+    def test_cli_csv_format_single_file(self):
+        import csv
+        from io import StringIO
+        from contextlib import redirect_stdout
+        from radreport_parser.cli import main
+
+        f = self._write_report("report.txt", CT_CHEST_REPORT)
+        buf = StringIO()
+        with redirect_stdout(buf):
+            main([f, "--critical", "--recommend", "--format", "csv"])
+        rows = list(csv.DictReader(buf.getvalue().splitlines()))
+        assert len(rows) == 1
+        assert rows[0]["source_file"] == "report.txt"
+        assert "modality" in rows[0]
+        assert "largest_measurement_mm" in rows[0]
+        assert "recommendation_count" in rows[0]
+
+    def test_cli_csv_format_batch(self):
+        import csv
+        from io import StringIO
+        from contextlib import redirect_stdout
+        from radreport_parser.cli import main
+
+        f1 = self._write_report("r1.txt", CT_CHEST_REPORT)
+        f2 = self._write_report("r2.txt", MRI_BRAIN_REPORT)
+        buf = StringIO()
+        with redirect_stdout(buf):
+            main([f1, f2, "--format", "csv"])
+        rows = list(csv.DictReader(buf.getvalue().splitlines()))
+        assert len(rows) == 2
+        filenames = {r["source_file"] for r in rows}
+        assert "r1.txt" in filenames
+        assert "r2.txt" in filenames
+
+    def test_cli_csv_fhir_conflict(self):
+        from radreport_parser.cli import main
+        with pytest.raises(SystemExit):
+            main(["somefile.txt", "--fhir", "--format", "csv"])
+
+
+# ---------------------------------------------------------------------------
+# Recommendation extractor tests
+# ---------------------------------------------------------------------------
+
+class TestRecommendationExtractor:
+
+    def setup_method(self):
+        self.parser    = ReportParser()
+        self.extractor = RecommendationExtractor()
+
+    def _parse_and_extract(self, text, modality=None):
+        report = self.parser.parse(text, modality=modality)
+        return self.extractor.extract(report)
+
+    def test_interval_months(self):
+        text = "IMPRESSION: Pulmonary nodule. Follow-up CT in 6 months is recommended."
+        report = self._parse_and_extract(text)
+        assert len(report.recommendations) == 1
+        assert report.recommendations[0].interval == "6 months"
+        assert report.recommendations[0].modality == "CT"
+
+    def test_interval_year(self):
+        text = "RECOMMENDATION: Annual CT surveillance recommended."
+        report = self._parse_and_extract(text)
+        assert len(report.recommendations) >= 1
+        assert report.recommendations[0].interval == "annual"
+
+    def test_modality_mri(self):
+        text = "IMPRESSION: Consider repeat MRI in 3 months for further evaluation."
+        report = self._parse_and_extract(text)
+        assert len(report.recommendations) == 1
+        assert report.recommendations[0].modality == "MRI"
+        assert report.recommendations[0].interval == "3 months"
+
+    def test_modality_ultrasound(self):
+        text = "RECOMMENDATION: 6-month follow-up ultrasound recommended."
+        report = self._parse_and_extract(text)
+        assert len(report.recommendations) == 1
+        assert report.recommendations[0].modality == "US"
+
+    def test_negation_no_follow_up(self):
+        text = "IMPRESSION: No follow-up imaging required. Normal study."
+        report = self._parse_and_extract(text)
+        assert len(report.recommendations) == 0
+
+    def test_negation_not_indicated(self):
+        text = "RECOMMENDATION: Repeat imaging not indicated at this time."
+        report = self._parse_and_extract(text)
+        assert len(report.recommendations) == 0
+
+    def test_urgency_urgent(self):
+        text = "IMPRESSION: Urgent follow-up CT recommended given rapid growth."
+        report = self._parse_and_extract(text)
+        assert len(report.recommendations) == 1
+        assert report.recommendations[0].urgency == "urgent"
+
+    def test_urgency_default_routine(self):
+        text = "IMPRESSION: 1-year follow-up CT recommended."
+        report = self._parse_and_extract(text)
+        assert len(report.recommendations) == 1
+        assert report.recommendations[0].urgency == "routine"
+
+    def test_no_modality_still_extracted(self):
+        text = "IMPRESSION: Follow-up in 3 months is advised."
+        report = self._parse_and_extract(text)
+        assert len(report.recommendations) == 1
+        assert report.recommendations[0].interval == "3 months"
+        assert report.recommendations[0].modality is None
+
+    def test_no_recommendations_on_normal_report(self):
+        report = self._parse_and_extract(NORMAL_XRAY_REPORT)
+        assert len(report.recommendations) == 0
+
+    def test_recommendations_in_to_dict(self):
+        text = "RECOMMENDATION: 6-month follow-up CT recommended."
+        report = self._parse_and_extract(text)
+        d = report.to_dict()
+        assert "recommendations" in d
+        assert len(d["recommendations"]) == 1
+        rec = d["recommendations"][0]
+        assert rec["interval"] == "6 months"
+        assert rec["modality"] == "CT"
+
+    def test_deduplication(self):
+        # Same sentence in both impression and recommendation sections
+        text = (
+            "IMPRESSION: 6-month follow-up CT recommended.\n"
+            "RECOMMENDATION: 6-month follow-up CT recommended."
+        )
+        report = self._parse_and_extract(text)
+        assert len(report.recommendations) == 1
+
+
+# ---------------------------------------------------------------------------
+# to_flat_dict tests
+# ---------------------------------------------------------------------------
+
+class TestToFlatDict:
+
+    def setup_method(self):
+        self.parser    = ReportParser()
+        self.detector  = CriticalFindingsDetector()
+        self.extractor = RecommendationExtractor()
+
+    def _full_parse(self, text, modality=None):
+        report = self.parser.parse(text, modality=modality)
+        report = self.detector.detect(report)
+        return self.extractor.extract(report)
+
+    def test_flat_dict_has_expected_keys(self):
+        report = self._full_parse(CT_CHEST_REPORT, "CT")
+        flat = report.to_flat_dict()
+        expected = {
+            "modality", "impression", "section_count", "measurement_count",
+            "largest_measurement_mm", "critical_finding_count", "urgent_finding_count",
+            "has_active_critical", "recommendation_count",
+            "follow_up_interval", "follow_up_modality", "follow_up_urgency",
+        }
+        assert expected == set(flat.keys())
+
+    def test_flat_dict_modality(self):
+        report = self._full_parse(CT_CHEST_REPORT, "CT")
+        assert report.to_flat_dict()["modality"] == "CT"
+
+    def test_flat_dict_measurements(self):
+        report = self._full_parse(MRI_BRAIN_REPORT, "MRI")
+        flat = report.to_flat_dict()
+        assert flat["measurement_count"] > 0
+        assert flat["largest_measurement_mm"] is not None
+        assert flat["largest_measurement_mm"] > 0
+
+    def test_flat_dict_critical_flags(self):
+        report = self._full_parse(CT_CHEST_REPORT, "CT")
+        flat = report.to_flat_dict()
+        assert flat["critical_finding_count"] >= 1
+        assert flat["has_active_critical"] is True
+
+    def test_flat_dict_normal_report_zeros(self):
+        report = self._full_parse(NORMAL_XRAY_REPORT)
+        flat = report.to_flat_dict()
+        assert flat["critical_finding_count"] == 0
+        assert flat["has_active_critical"] is False
+        assert flat["recommendation_count"] == 0
+
+    def test_flat_dict_no_measurements_is_none(self):
+        text = "IMPRESSION: Normal study. No acute findings."
+        report = self._full_parse(text)
+        flat = report.to_flat_dict()
+        assert flat["largest_measurement_mm"] is None
+        assert flat["measurement_count"] == 0
+
+    def test_flat_dict_recommendation_fields(self):
+        text = "IMPRESSION: 6-month follow-up CT recommended for nodule surveillance."
+        report = self._full_parse(text)
+        flat = report.to_flat_dict()
+        assert flat["recommendation_count"] == 1
+        assert flat["follow_up_interval"] == "6 months"
+        assert flat["follow_up_modality"] == "CT"
+        assert flat["follow_up_urgency"] == "routine"
+
+    def test_flat_dict_no_recommendation_fields_are_none(self):
+        report = self._full_parse(NORMAL_XRAY_REPORT)
+        flat = report.to_flat_dict()
+        assert flat["follow_up_interval"] is None
+        assert flat["follow_up_modality"] is None
+        assert flat["follow_up_urgency"] is None

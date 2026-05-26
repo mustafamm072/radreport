@@ -11,14 +11,16 @@ from .report_schema import (
 )
 
 
-# Common section headers across radiology report styles
+# Common section headers across radiology report styles.
+# (?im): case-insensitive + multiline so ^ anchors to line start.
+# This prevents false matches on words like "follow-up" or "findings" mid-sentence.
 SECTION_PATTERNS = {
-    "indication":       r"(?i)(indication|clinical\s+indication|reason\s+for\s+exam|history)[:\s]",
-    "technique":        r"(?i)(technique|procedure|protocol|method)[:\s]",
-    "comparison":       r"(?i)(comparison|prior\s+study|prior\s+exam|previous)[:\s]",
-    "findings":         r"(?i)(findings?|observations?|result)[:\s]",
-    "impression":       r"(?i)(impression|conclusion|summary|assessment|diagnosis)[:\s]",
-    "recommendation":   r"(?i)(recommendation|follow[- ]?up|advised)[:\s]",
+    "indication":       r"(?im)^[ \t]*(indication|clinical\s+indication|reason\s+for\s+exam|history)[:\s]",
+    "technique":        r"(?im)^[ \t]*(technique|procedure|protocol|method)[:\s]",
+    "comparison":       r"(?im)^[ \t]*(comparison|prior\s+study|prior\s+exam|previous)[:\s]",
+    "findings":         r"(?im)^[ \t]*(findings?|observations?|result)[:\s]",
+    "impression":       r"(?im)^[ \t]*(impression|conclusion|summary|assessment|diagnosis)[:\s]",
+    "recommendation":   r"(?im)^[ \t]*(recommendation|follow[- ]?up|advised)[:\s]",
 }
 
 # Measurement normalization patterns

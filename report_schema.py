@@ -4,7 +4,7 @@ All output from the library uses these dataclasses.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Any
 
 
 @dataclass
@@ -64,6 +64,23 @@ class ReportSection:
 
 
 @dataclass
+class FollowUpRecommendation:
+    """A structured follow-up imaging recommendation extracted from the report."""
+    text: str                          # Original sentence
+    interval: Optional[str] = None    # "6 months", "1 year", "annual", "short-term"
+    modality: Optional[str] = None    # "CT", "MRI", "US", "XR", "PET", "NM", "mammography"
+    urgency: str = "routine"          # "routine" | "urgent"
+
+    def to_dict(self) -> dict:
+        return {
+            "text": self.text,
+            "interval": self.interval,
+            "modality": self.modality,
+            "urgency": self.urgency,
+        }
+
+
+@dataclass
 class CriticalFinding:
     """A flagged critical / urgent finding."""
     term: str               # The keyword that triggered the flag
@@ -95,6 +112,7 @@ class ParsedReport:
     all_measurements: list[Measurement]
     modality: Optional[str] = None
     critical_findings: list[CriticalFinding] = field(default_factory=list)
+    recommendations: list[FollowUpRecommendation] = field(default_factory=list)
 
     def get_section(self, name: str) -> Optional[ReportSection]:
         """Retrieve a section by name (case-insensitive)."""
@@ -111,6 +129,38 @@ class ParsedReport:
             "findings_text": self.findings_text,
             "all_measurements": [m.to_dict() for m in self.all_measurements],
             "critical_findings": [c.to_dict() for c in self.critical_findings],
+            "recommendations": [r.to_dict() for r in self.recommendations],
+        }
+
+    def to_flat_dict(self) -> dict[str, Any]:
+        """
+        Flat key/value representation — one row per report, suitable for CSV.
+
+        Fields:
+          modality, impression, section_count, measurement_count,
+          largest_measurement_mm, critical_finding_count, urgent_finding_count,
+          has_active_critical, recommendation_count,
+          follow_up_interval, follow_up_modality, follow_up_urgency
+        """
+        active = [cf for cf in self.critical_findings if not cf.negated]
+        first_rec = self.recommendations[0] if self.recommendations else None
+        largest = max(
+            (m.largest_dimension_mm for m in self.all_measurements),
+            default=None,
+        )
+        return {
+            "modality": self.modality or "",
+            "impression": self.impression,
+            "section_count": len(self.sections),
+            "measurement_count": len(self.all_measurements),
+            "largest_measurement_mm": largest,
+            "critical_finding_count": sum(1 for cf in active if cf.severity == "critical"),
+            "urgent_finding_count": sum(1 for cf in active if cf.severity == "urgent"),
+            "has_active_critical": any(cf.severity == "critical" for cf in active),
+            "recommendation_count": len(self.recommendations),
+            "follow_up_interval": first_rec.interval if first_rec else None,
+            "follow_up_modality": first_rec.modality if first_rec else None,
+            "follow_up_urgency": first_rec.urgency if first_rec else None,
         }
 
     def to_json(self, indent: int = 2) -> str:
