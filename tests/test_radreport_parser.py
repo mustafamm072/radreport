@@ -286,3 +286,167 @@ class TestFHIRExporter:
         section_exts = [e for e in fhir["extension"]
                         if "report-section" in e.get("url", "")]
         assert len(section_exts) > 0
+
+
+# ---------------------------------------------------------------------------
+# parse_batch tests
+# ---------------------------------------------------------------------------
+
+class TestParseBatch:
+
+    def setup_method(self):
+        self.parser = ReportParser()
+
+    def test_batch_returns_list(self):
+        results = self.parser.parse_batch([CT_CHEST_REPORT, MRI_BRAIN_REPORT])
+        assert len(results) == 2
+
+    def test_batch_all_parsed(self):
+        results = self.parser.parse_batch([CT_CHEST_REPORT, NORMAL_XRAY_REPORT], modality="CT")
+        assert all(r is not None for r in results)
+        assert all(r.modality == "CT" for r in results)
+
+    def test_batch_empty_input_returns_none(self):
+        results = self.parser.parse_batch(["", CT_CHEST_REPORT])
+        assert results[0] is None
+        assert results[1] is not None
+
+    def test_batch_empty_list(self):
+        results = self.parser.parse_batch([])
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
+# to_json tests
+# ---------------------------------------------------------------------------
+
+class TestToJson:
+
+    def setup_method(self):
+        self.parser = ReportParser()
+
+    def test_to_json_is_valid_json(self):
+        import json
+        report = self.parser.parse(CT_CHEST_REPORT, modality="CT")
+        s = report.to_json()
+        parsed = json.loads(s)
+        assert parsed["modality"] == "CT"
+
+    def test_to_json_contains_sections(self):
+        import json
+        report = self.parser.parse(MRI_BRAIN_REPORT)
+        d = json.loads(report.to_json())
+        assert "sections" in d
+        assert len(d["sections"]) > 0
+
+    def test_to_json_roundtrip_measurements(self):
+        import json
+        report = self.parser.parse(MRI_BRAIN_REPORT)
+        d = json.loads(report.to_json())
+        assert len(d["all_measurements"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# pe abbreviation bug regression
+# ---------------------------------------------------------------------------
+
+class TestPEAbbreviationDetection:
+
+    def setup_method(self):
+        self.parser = ReportParser()
+        self.detector = CriticalFindingsDetector()
+
+    def test_pe_abbreviation_detected(self):
+        text = "IMPRESSION: PE in the right main pulmonary artery."
+        report = self.parser.parse(text)
+        report = self.detector.detect(report)
+        terms = [cf.term for cf in report.critical_findings]
+        assert "pe" in terms or "pulmonary embolism" in terms
+
+    def test_pe_abbreviation_end_of_sentence(self):
+        text = "IMPRESSION: Findings consistent with PE."
+        report = self.parser.parse(text)
+        report = self.detector.detect(report)
+        active = [cf for cf in report.critical_findings if not cf.negated]
+        assert any(cf.term in ("pe", "pulmonary embolism") for cf in active)
+
+
+# ---------------------------------------------------------------------------
+# CLI tests
+# ---------------------------------------------------------------------------
+
+class TestCLI:
+
+    def setup_method(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+
+    def _write_report(self, name, text):
+        from pathlib import Path
+        p = Path(self.tmp) / name
+        p.write_text(text, encoding="utf-8")
+        return str(p)
+
+    def test_cli_parses_single_file(self):
+        import json
+        from io import StringIO
+        from contextlib import redirect_stdout
+        from radreport_parser.cli import main
+
+        f = self._write_report("report.txt", CT_CHEST_REPORT)
+        buf = StringIO()
+        with redirect_stdout(buf):
+            main([f])
+        result = json.loads(buf.getvalue())
+        assert "sections" in result
+        assert result["source_file"] == "report.txt"
+
+    def test_cli_fhir_flag(self):
+        import json
+        from io import StringIO
+        from contextlib import redirect_stdout
+        from radreport_parser.cli import main
+
+        f = self._write_report("report.txt", CT_CHEST_REPORT)
+        buf = StringIO()
+        with redirect_stdout(buf):
+            main([f, "--fhir", "--patient-id", "pt-99", "--modality", "CT"])
+        result = json.loads(buf.getvalue())
+        assert result["resourceType"] == "DiagnosticReport"
+        assert result["subject"]["reference"] == "Patient/pt-99"
+
+    def test_cli_batch_returns_list(self):
+        import json
+        from io import StringIO
+        from contextlib import redirect_stdout
+        from radreport_parser.cli import main
+
+        f1 = self._write_report("r1.txt", CT_CHEST_REPORT)
+        f2 = self._write_report("r2.txt", NORMAL_XRAY_REPORT)
+        buf = StringIO()
+        with redirect_stdout(buf):
+            main([f1, f2])
+        result = json.loads(buf.getvalue())
+        assert isinstance(result, list)
+        assert len(result) == 2
+
+    def test_cli_missing_file_exits(self):
+        from radreport_parser.cli import main
+        with pytest.raises(SystemExit):
+            main(["/nonexistent/path/report.txt"])
+
+    def test_cli_output_file(self):
+        import json
+        from pathlib import Path
+        from io import StringIO
+        from contextlib import redirect_stdout, redirect_stderr
+        from radreport_parser.cli import main
+
+        f = self._write_report("report.txt", NORMAL_XRAY_REPORT)
+        out = str(Path(self.tmp) / "out.json")
+        buf = StringIO()
+        with redirect_stdout(buf), redirect_stderr(StringIO()):
+            main([f, "-o", out])
+        assert buf.getvalue() == ""
+        result = json.loads(Path(out).read_text())
+        assert "sections" in result

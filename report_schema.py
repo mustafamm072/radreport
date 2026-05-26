@@ -112,3 +112,8 @@ class ParsedReport:
             "all_measurements": [m.to_dict() for m in self.all_measurements],
             "critical_findings": [c.to_dict() for c in self.critical_findings],
         }
+
+    def to_json(self, indent: int = 2) -> str:
+        """Serialize to a JSON string. Shorthand for json.dumps(report.to_dict())."""
+        import json
+        return json.dumps(self.to_dict(), indent=indent)

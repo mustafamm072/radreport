@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: radreport-parser
-Version: 0.1.0
+Version: 0.2.0
 Summary: Parse, structure, and export radiology free-text reports to FHIR
 License: MIT
 Project-URL: Homepage, https://github.com/yourorg/radreport-parser

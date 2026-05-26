@@ -171,6 +171,30 @@ class ReportParser:
         result = parser.parse(report_text)
     """
 
+    def parse_batch(
+        self,
+        texts: list,
+        modality: Optional[str] = None,
+    ) -> list:
+        """
+        Parse a list of report texts.
+
+        Args:
+            texts:    List of raw report strings.
+            modality: Modality hint applied to all reports (e.g. "CT").
+
+        Returns:
+            List of ParsedReport objects, one per input.
+            Entries that fail (empty text, etc.) are returned as None.
+        """
+        results = []
+        for text in texts:
+            try:
+                results.append(self.parse(text, modality=modality))
+            except ValueError:
+                results.append(None)
+        return results
+
     def parse(self, text: str, modality: Optional[str] = None) -> ParsedReport:
         """
         Parse a free-text radiology report into structured data.

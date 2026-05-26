@@ -3,6 +3,7 @@ pyproject.toml
 radreport_parser.egg-info/PKG-INFO
 radreport_parser.egg-info/SOURCES.txt
 radreport_parser.egg-info/dependency_links.txt
+radreport_parser.egg-info/entry_points.txt
 radreport_parser.egg-info/requires.txt
 radreport_parser.egg-info/top_level.txt
 tests/test_radreport_parser.py

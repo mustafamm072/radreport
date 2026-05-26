@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.DS_Store
+.env
+.venv
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+output_fhir.json

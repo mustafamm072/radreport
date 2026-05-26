@@ -6,7 +6,7 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Radiology reports come out as free-text PDFs. Downstream systems — EMRs, telehealth portals, billing platforms — need structured data. This library bridges that gap.
+Radiology reports come out as free-text PDFs. Downstream systems — EMRs, telehealth portals, billing platforms, research pipelines — need structured data. This library bridges that gap.
 
 Three things it does well:
 
@@ -69,6 +69,39 @@ print(json.dumps(fhir, indent=2))
 
 ---
 
+## CLI
+
+After installation, the `radreport` command is available for single-file and batch processing:
+
+```bash
+# Parse a single report to JSON
+radreport report.txt
+
+# Parse with critical findings detection
+radreport report.txt --critical
+
+# Export as FHIR DiagnosticReport
+radreport report.txt --fhir --patient-id pt-001 --modality CT
+
+# Batch process multiple files → JSON array
+radreport reports/*.txt --critical -o batch.json
+
+# Specify modality for all files
+radreport *.txt --modality MRI --fhir -o fhir_batch.json
+```
+
+**Flags:**
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--modality MOD` | `-m` | CT, MRI, XR, US, NM, PET … |
+| `--critical` | `-c` | Run critical findings detection |
+| `--fhir` | `-f` | Export as FHIR R4 DiagnosticReport (implies --critical) |
+| `--patient-id ID` | | FHIR Patient resource ID |
+| `--output FILE` | `-o` | Write output to file instead of stdout |
+
+---
+
 ## Parsing
 
 ### Sections
@@ -120,6 +153,27 @@ for finding in findings_section.findings:
     print(f"Text: {finding.text}")
 ```
 
+### Batch processing
+
+```python
+reports = parser.parse_batch(list_of_texts, modality="CT")
+# Returns list[ParsedReport | None] — None for empty/unparseable inputs
+active = [r for r in reports if r is not None]
+```
+
+### JSON serialization
+
+```python
+report = parser.parse(text, modality="CT")
+
+# As dict
+d = report.to_dict()
+
+# As JSON string (shorthand)
+json_str = report.to_json()
+json_str = report.to_json(indent=4)
+```
+
 ---
 
 ## Critical Findings Detection
@@ -131,7 +185,7 @@ Covers 45+ terms across 8 categories:
 | Category    | Examples |
 |-------------|----------|
 | `vascular`  | aortic dissection, DVT, aortic aneurysm |
-| `pulmonary` | pulmonary embolism, pneumothorax, hemothorax |
+| `pulmonary` | pulmonary embolism, PE, pneumothorax, hemothorax |
 | `neuro`     | subdural hematoma, midline shift, intracranial hemorrhage |
 | `abdominal` | free air, bowel perforation, appendicitis |
 | `cardiac`   | cardiac tamponade, pericardial effusion |
@@ -156,9 +210,8 @@ active = [cf for cf in report.critical_findings if not cf.negated]
 ### Extending the term list
 
 ```python
-from radreport_parser.detectors.critical_findings import CRITICAL_TERMS
+from radreport_parser.critical_findings import CRITICAL_TERMS
 
-# Add your own terms
 CRITICAL_TERMS["tension pneumothorax"] = ("pulmonary", "critical")
 CRITICAL_TERMS["septic emboli"] = ("vascular", "urgent")
 ```
@@ -209,13 +262,15 @@ def process_report(text: str, modality: str, patient_id: str) -> dict:
 
     active_criticals = [cf for cf in report.critical_findings if not cf.negated]
     if active_criticals:
-        print(f"⚠️  {len(active_criticals)} critical finding(s) detected")
+        print(f"WARNING: {len(active_criticals)} critical finding(s) detected")
 
     return exporter.export(report, patient_id=patient_id)
 
 fhir_json = process_report(report_text, modality="CT", patient_id="pt-001")
 print(json.dumps(fhir_json, indent=2))
 ```
+
+See [full_pipeline.py](full_pipeline.py) for a runnable end-to-end example.
 
 ---
 
@@ -242,10 +297,13 @@ pytest tests/ -v
 
 ## Roadmap
 
+- [x] CLI tool for single-file and batch processing (`radreport` command)
+- [x] `parse_batch()` API for processing lists of reports
+- [x] `to_json()` convenience method on `ParsedReport`
 - [ ] Template matching for common report types (Chest XR, CT Abdomen, MRI Brain)
 - [ ] Structured output for follow-up recommendations
 - [ ] Additional FHIR resource types (ImagingStudy, Condition)
-- [ ] CLI tool for batch processing
+- [ ] CSV export mode for research/analytics workflows
 
 ---
 

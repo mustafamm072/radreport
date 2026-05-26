@@ -24,7 +24,7 @@ CRITICAL_TERMS: dict[str, tuple[str, str]] = {
     "aortic rupture":               ("vascular", "critical"),
     "aortic aneurysm":              ("vascular", "urgent"),
     "pulmonary embolism":           ("pulmonary", "critical"),
-    "pe ":                          ("pulmonary", "critical"),  # abbreviation
+    "pe":                           ("pulmonary", "critical"),  # abbreviation
     "saddle embolus":               ("pulmonary", "critical"),
     "deep vein thrombosis":         ("vascular", "urgent"),
     "dvt":                          ("vascular", "urgent"),

@@ -26,7 +26,7 @@ from .report_schema import (
     CriticalFinding,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "ReportParser",
     "CriticalFindingsDetector",
@@ -36,4 +36,5 @@ __all__ = [
     "Finding",
     "Measurement",
     "CriticalFinding",
+    "__version__",
 ]
