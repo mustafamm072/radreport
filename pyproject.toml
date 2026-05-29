@@ -37,9 +37,8 @@ Homepage = "https://github.com/yourorg/radreport-parser"
 Documentation = "https://github.com/yourorg/radreport-parser#readme"
 Issues = "https://github.com/yourorg/radreport-parser/issues"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["radreport_parser*"]
+[tool.setuptools.packages]
+find = { include = ["radreport_parser*"] }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

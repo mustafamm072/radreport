@@ -1,13 +1,13 @@
 """
 End-to-end example: radreport-parser full pipeline.
-Run: python examples/full_pipeline.py
+Run from repo root: python examples/full_pipeline.py
 """
 
 import sys
 import os
 import json
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))  # repo root
 
 from radreport_parser import ReportParser, CriticalFindingsDetector, FHIRExporter
 
