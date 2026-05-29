@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+title: radreport-parser
+message: "If you use this software, please cite it using these metadata."
+type: software
+authors:
+  - family-names: Merchant
+    given-names: Mustafa
+    email: mustafamerchant072@gmail.com
+repository-code: "https://github.com/mustafamm072/radreport_parser"
+url: "https://github.com/mustafamm072/radreport_parser"
+abstract: >-
+  Parse, structure, and export radiology free-text reports to FHIR.
+  Rule-based, zero-dependency extraction of sections, measurements,
+  critical findings, and follow-up recommendations.
+keywords:
+  - radiology
+  - FHIR
+  - medical imaging
+  - healthcare
+  - NLP
+license: MIT
+version: 0.3.0
+date-released: "2026-05-28"

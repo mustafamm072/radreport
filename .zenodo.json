@@ -1,0 +1,19 @@
+{
+  "title": "radreport-parser",
+  "description": "Parse, structure, and export radiology free-text reports to FHIR. Rule-based, zero-dependency extraction of sections, measurements, critical findings, and follow-up recommendations.",
+  "license": "MIT",
+  "upload_type": "software",
+  "access_right": "open",
+  "keywords": [
+    "radiology",
+    "FHIR",
+    "medical imaging",
+    "healthcare",
+    "NLP"
+  ],
+  "creators": [
+    {
+      "name": "Merchant, Mustafa"
+    }
+  ]
+}
