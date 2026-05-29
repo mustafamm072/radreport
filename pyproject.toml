@@ -7,14 +7,15 @@ name = "radreport-parser"
 version = "0.3.0"
 description = "Parse, structure, and export radiology free-text reports to FHIR"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
+authors = [{ name = "Mustafa Merchant", email = "mustafamerchant072@gmail.com" }]
 keywords = ["radiology", "DICOM", "FHIR", "medical imaging", "healthcare", "NLP"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Healthcare Industry",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -33,9 +34,9 @@ radreport = "radreport_parser.cli:main"
 dev = ["pytest>=7.0", "pytest-cov"]
 
 [project.urls]
-Homepage = "https://github.com/yourorg/radreport-parser"
-Documentation = "https://github.com/yourorg/radreport-parser#readme"
-Issues = "https://github.com/yourorg/radreport-parser/issues"
+Homepage = "https://github.com/mustafamm072/radreport_parser"
+Documentation = "https://github.com/mustafamm072/radreport_parser#readme"
+Issues = "https://github.com/mustafamm072/radreport_parser/issues"
 
 [tool.setuptools.packages]
 find = { include = ["radreport_parser*"] }
