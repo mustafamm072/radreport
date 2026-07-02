@@ -1,25 +1,26 @@
-# radreport-parser
+# radreport
 
 **Parse radiology free-text reports into structured data. No ML. No GPU. No dependencies.**
 
-[![PyPI version](https://badge.fury.io/py/radreport-parser.svg)](https://badge.fury.io/py/radreport-parser)
+[![PyPI version](https://badge.fury.io/py/radreport.svg)](https://badge.fury.io/py/radreport)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Radiology reports come out as free-text PDFs. Downstream systems — EMRs, telehealth portals, billing platforms, research pipelines — need structured data. This library bridges that gap.
 
-Three things it does well:
+Four things it does well:
 
 1. **Parse** — splits any free-text report into labeled sections, extracts measurements, links findings to anatomy
 2. **Detect** — flags critical/urgent findings with negation awareness (no false alerts for "no pneumothorax")
-3. **Export** — outputs FHIR R4 DiagnosticReport resources ready for any EMR
+3. **De-identify** — redacts PHI (dates, MRNs, names, contact info…) with a full audit trail, so reports can leave a controlled environment for research
+4. **Export** — outputs FHIR R4 DiagnosticReport resources ready for any EMR
 
 ---
 
 ## Install
 
 ```bash
-pip install radreport-parser
+pip install radreport
 ```
 
 Zero required dependencies. Works on Python 3.9+.
@@ -29,7 +30,7 @@ Zero required dependencies. Works on Python 3.9+.
 ## Quick Start
 
 ```python
-from radreport_parser import ReportParser, CriticalFindingsDetector, FHIRExporter
+from radreport import ReportParser, CriticalFindingsDetector, FHIRExporter
 import json
 
 report_text = """
@@ -83,11 +84,20 @@ radreport report.txt --critical
 # Export as FHIR DiagnosticReport
 radreport report.txt --fhir --patient-id pt-001 --modality CT
 
+# Extract follow-up recommendations too
+radreport report.txt --critical --recommend
+
+# Redact PHI before parsing (safe to store/share the output)
+radreport report.txt --deidentify --critical
+
 # Batch process multiple files → JSON array
 radreport reports/*.txt --critical -o batch.json
 
 # Specify modality for all files
 radreport *.txt --modality MRI --fhir -o fhir_batch.json
+
+# Flat CSV for research/analytics (one row per report)
+radreport reports/*.txt --critical --recommend --format csv -o cohort.csv
 ```
 
 **Flags:**
@@ -96,8 +106,11 @@ radreport *.txt --modality MRI --fhir -o fhir_batch.json
 |------|-------|-------------|
 | `--modality MOD` | `-m` | CT, MRI, XR, US, NM, PET … |
 | `--critical` | `-c` | Run critical findings detection |
+| `--recommend` | `-r` | Extract follow-up imaging recommendations |
+| `--deidentify` | `-d` | Redact PHI (dates, MRN, names, phone…) before parsing |
 | `--fhir` | `-f` | Export as FHIR R4 DiagnosticReport (implies --critical) |
-| `--patient-id ID` | | FHIR Patient resource ID |
+| `--patient-id ID` | | FHIR Patient resource ID (used with `--fhir`) |
+| `--format FMT` | `--fmt` | Output format: `json` (default) or `csv` (not compatible with `--fhir`) |
 | `--output FILE` | `-o` | Write output to file instead of stdout |
 
 ---
@@ -180,7 +193,7 @@ json_str = report.to_json(indent=4)
 
 Rule-based. Fully auditable. No black boxes.
 
-Covers 45+ terms across 8 categories:
+Covers 45+ terms across 7 categories:
 
 | Category    | Examples |
 |-------------|----------|
@@ -201,6 +214,16 @@ Covers 45+ terms across 8 categories:
 active = [cf for cf in report.critical_findings if not cf.negated]
 ```
 
+Negation is **scoped to the sentence** and **fails safe**:
+
+- A negation in one sentence never carries into the next — *"No acute hemorrhage.
+  Large subdural hematoma is present."* flags the hematoma as active.
+- When a term appears more than once, an active (non-negated) mention always wins
+  over a negated one — *"No pneumothorax at the apex. Large pneumothorax at the
+  base."* flags pneumothorax as active. A term is reported as negated only when
+  **every** mention is negated. This prevents a real critical finding from being
+  silently suppressed by an earlier "no ..." phrase.
+
 ### Severity levels
 
 - `critical` — requires immediate action (PE, subdural hematoma, pneumothorax)
@@ -210,11 +233,98 @@ active = [cf for cf in report.critical_findings if not cf.negated]
 ### Extending the term list
 
 ```python
-from radreport_parser.critical_findings import CRITICAL_TERMS
+from radreport.critical_findings import CRITICAL_TERMS
 
 CRITICAL_TERMS["tension pneumothorax"] = ("pulmonary", "critical")
 CRITICAL_TERMS["septic emboli"] = ("vascular", "urgent")
 ```
+
+---
+
+## Follow-up Recommendations
+
+Extract structured follow-up imaging recommendations from the recommendation and
+impression sections — interval, modality, and urgency.
+
+```python
+from radreport import ReportParser, RecommendationExtractor
+
+report = ReportParser().parse(text, modality="CT")
+report = RecommendationExtractor().extract(report)
+
+for rec in report.recommendations:
+    print(rec.interval, rec.modality, rec.urgency)
+
+# "Recommend follow-up CT in 6 months."
+# → interval="6 months", modality="CT", urgency="routine"
+```
+
+Negation-aware: *"No follow-up imaging indicated"* yields no recommendation.
+Identical recommendations are deduplicated.
+
+---
+
+## De-identification
+
+Strip Protected Health Information (PHI) from a report before it leaves a
+controlled environment — for research collaboration, analytics warehouses, or
+off-site processing. Like everything else in this library, it is **rule-based
+and fully auditable**: every removal is a traceable regular-expression match,
+recorded with its original offset. No ML, no cloud NER service — the kind of
+thing hospital IT will actually approve.
+
+```python
+from radreport import Deidentifier
+
+deid = Deidentifier()
+result = deid.deidentify(raw_report_text)
+
+print(result.text)              # scrubbed report, safe to share
+print(result.redaction_count)   # e.g. 11
+print(result.category_counts()) # {"date": 3, "mrn": 1, "name": 2, ...}
+
+# Audit trail — every removed span, keyed to the original text
+for r in result.redactions:
+    print(r.category, r.original, "→", r.replacement, f"@{r.start}:{r.end}")
+```
+
+### What it detects
+
+Categories map to the HIPAA Safe Harbor identifiers that are reliably matchable
+from text alone:
+
+| Category | Examples |
+|----------|----------|
+| `date` | `03/10/2024`, `2024-03-10`, `March 5, 2024` |
+| `age` | ages **90+** (`94-year-old`) — HIPAA requires aggregating these |
+| `ssn` | `123-45-6789` |
+| `mrn` | `MRN: 12345678`, `Medical Record Number 12345678` |
+| `accession` | `Accession: A98765432` |
+| `phone` | `(555) 123-4567`, `555-123-4567` |
+| `email` | `jdoe@example.com` |
+| `url` | `http://pacs.hospital.org/...` |
+| `ipv4` | `10.0.0.1` |
+| `zip` | `DC 20500` (ZIP after a state code) |
+| `name` | titled names (`Dr. Jane Smith`) and header fields (`Patient Name: …`) |
+
+Clinical content is preserved: a `6 mm` nodule or a `90 mm` mass is never
+mistaken for PHI, because age matching requires an explicit age cue.
+
+### Configuration
+
+```python
+# Redact only dates and names, and use a custom placeholder for names
+deid = Deidentifier(
+    categories=["date", "name"],
+    placeholders={"name": "XXXX"},
+)
+```
+
+> **Scope and limitations.** Rule-based de-identification is a strong first pass,
+> not a compliance guarantee. Names that appear in free narrative **without** a
+> title or header label are not caught. Always review the output before PHI
+> leaves a controlled environment. This tool does not certify HIPAA Safe Harbor
+> compliance.
 
 ---
 
@@ -250,7 +360,7 @@ fhir = exporter.export(
 
 ```python
 import json
-from radreport_parser import ReportParser, CriticalFindingsDetector, FHIRExporter
+from radreport import ReportParser, CriticalFindingsDetector, FHIRExporter
 
 parser   = ReportParser()
 detector = CriticalFindingsDetector()
@@ -270,7 +380,7 @@ fhir_json = process_report(report_text, modality="CT", patient_id="pt-001")
 print(json.dumps(fhir_json, indent=2))
 ```
 
-See [full_pipeline.py](full_pipeline.py) for a runnable end-to-end example.
+See [examples/full_pipeline.py](examples/full_pipeline.py) for a runnable end-to-end example.
 
 ---
 
@@ -282,6 +392,8 @@ See [full_pipeline.py](full_pipeline.py) for a runnable end-to-end example.
 
 **Negation-aware.** A library that can't distinguish "no pneumothorax" from "pneumothorax" is dangerous in clinical contexts. Negation detection is built into the core.
 
+**Auditable de-identification.** PHI redaction runs locally with no ML and no external calls, and every removed span is logged with its original offset — so a privacy officer can review exactly what left the building and why.
+
 **FHIR-first output.** Every modern EMR speaks FHIR. The export format is designed to drop into existing integrations without transformation.
 
 ---
@@ -289,7 +401,7 @@ See [full_pipeline.py](full_pipeline.py) for a runnable end-to-end example.
 ## Running Tests
 
 ```bash
-pip install radreport-parser[dev]
+pip install radreport[dev]
 pytest tests/ -v
 ```
 
@@ -300,10 +412,12 @@ pytest tests/ -v
 - [x] CLI tool for single-file and batch processing (`radreport` command)
 - [x] `parse_batch()` API for processing lists of reports
 - [x] `to_json()` convenience method on `ParsedReport`
+- [x] Structured output for follow-up recommendations (`RecommendationExtractor`)
+- [x] CSV export mode for research/analytics workflows (`--format csv`)
+- [x] Rule-based PHI de-identification with audit trail (`Deidentifier`)
 - [ ] Template matching for common report types (Chest XR, CT Abdomen, MRI Brain)
-- [ ] Structured output for follow-up recommendations
+- [ ] Structured comparison / prior-study extraction (new / increased / stable / resolved)
 - [ ] Additional FHIR resource types (ImagingStudy, Condition)
-- [ ] CSV export mode for research/analytics workflows
 
 ---
 

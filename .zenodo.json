@@ -1,6 +1,6 @@
 {
-  "title": "radreport-parser",
-  "description": "Parse, structure, and export radiology free-text reports to FHIR. Rule-based, zero-dependency extraction of sections, measurements, critical findings, and follow-up recommendations.",
+  "title": "radreport",
+  "description": "Parse, de-identify, structure, and export radiology free-text reports to FHIR. Rule-based, zero-dependency extraction of sections, measurements, critical findings, follow-up recommendations, and PHI redaction.",
   "license": "MIT",
   "upload_type": "software",
   "access_right": "open",

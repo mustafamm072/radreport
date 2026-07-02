@@ -81,6 +81,57 @@ class FollowUpRecommendation:
 
 
 @dataclass
+class Redaction:
+    """A single span of PHI removed from a report during de-identification."""
+    category: str        # e.g. "date", "mrn", "name", "phone"
+    original: str        # The original text that was redacted
+    replacement: str     # The placeholder token substituted in, e.g. "[DATE]"
+    start: int           # Start offset in the original text
+    end: int             # End offset in the original text (exclusive)
+
+    def to_dict(self) -> dict:
+        return {
+            "category": self.category,
+            "original": self.original,
+            "replacement": self.replacement,
+            "start": self.start,
+            "end": self.end,
+        }
+
+
+@dataclass
+class DeidentificationResult:
+    """
+    Output of Deidentifier.deidentify().
+
+    `text` is the scrubbed report, safe to store or share. `redactions` is the
+    ordered audit trail of every span that was removed, keyed to offsets in the
+    ORIGINAL text so the transformation is fully reproducible and reviewable.
+    """
+    text: str
+    redactions: list["Redaction"] = field(default_factory=list)
+
+    @property
+    def redaction_count(self) -> int:
+        return len(self.redactions)
+
+    def category_counts(self) -> dict[str, int]:
+        """Number of redactions per PHI category, useful for audit summaries."""
+        counts: dict[str, int] = {}
+        for r in self.redactions:
+            counts[r.category] = counts.get(r.category, 0) + 1
+        return counts
+
+    def to_dict(self) -> dict:
+        return {
+            "text": self.text,
+            "redaction_count": self.redaction_count,
+            "category_counts": self.category_counts(),
+            "redactions": [r.to_dict() for r in self.redactions],
+        }
+
+
+@dataclass
 class CriticalFinding:
     """A flagged critical / urgent finding."""
     term: str               # The keyword that triggered the flag

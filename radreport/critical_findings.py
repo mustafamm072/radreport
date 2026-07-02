@@ -98,12 +98,31 @@ NEGATION_PHRASES = [
     r"not\s+present",
 ]
 
-NEGATION_WINDOW = 60  # characters to look back for negation context
+NEGATION_WINDOW = 60  # max characters to look back for negation context
+
+# Sentence boundary just before the match. Negation is scoped to the current
+# sentence so a negation in a *previous* sentence cannot suppress a finding in
+# the current one (e.g. "No acute hemorrhage. Large subdural hematoma present.").
+_SENTENCE_BOUNDARY = re.compile(r"[.!?\n]")
 
 
 def _is_negated(text: str, match_start: int) -> bool:
-    """Check if a matched term is preceded by a negation phrase."""
-    window_start = max(0, match_start - NEGATION_WINDOW)
+    """
+    Check if a matched term is preceded by a negation phrase.
+
+    The look-back window is bounded by both NEGATION_WINDOW characters *and* the
+    start of the current sentence, whichever is closer. Scoping to the sentence
+    prevents a negation from a previous sentence from wrongly negating a real
+    finding — a false-negative that would suppress a critical alert.
+    """
+    char_window_start = max(0, match_start - NEGATION_WINDOW)
+
+    # Find the start of the current sentence (after the last boundary char).
+    sentence_start = 0
+    for m in _SENTENCE_BOUNDARY.finditer(text, 0, match_start):
+        sentence_start = m.end()
+
+    window_start = max(char_window_start, sentence_start)
     preceding = text[window_start:match_start].lower()
 
     for phrase in NEGATION_PHRASES:
@@ -158,27 +177,36 @@ class CriticalFindingsDetector:
         scan_text = "\n".join(scan_text_parts) if scan_text_parts else report.raw_text
 
         findings: list[CriticalFinding] = []
-        seen_terms: set[str] = set()
 
         for term, (category, severity) in CRITICAL_TERMS.items():
             pattern = re.compile(r'\b' + re.escape(term) + r'\b', re.IGNORECASE)
+            normalized_term = term.strip()
 
-            for match in pattern.finditer(scan_text):
-                normalized_term = term.strip()
-                if normalized_term in seen_terms:
-                    continue
-                seen_terms.add(normalized_term)
+            # Collect every occurrence of the term, then emit a single finding.
+            # A term is only reported as negated if EVERY occurrence is negated:
+            # a real (non-negated) mention must never be suppressed by a negated
+            # one elsewhere in the report — that would drop a critical alert.
+            matches = list(pattern.finditer(scan_text))
+            if not matches:
+                continue
 
-                negated = _is_negated(scan_text, match.start())
-                context = _get_sentence_context(scan_text, match.start(), match.end())
+            active_match = None
+            for match in matches:
+                if not _is_negated(scan_text, match.start()):
+                    active_match = match
+                    break
 
-                findings.append(CriticalFinding(
-                    term=normalized_term,
-                    category=category,
-                    severity=severity,
-                    context=context,
-                    negated=negated,
-                ))
+            chosen = active_match or matches[0]
+            negated = active_match is None
+            context = _get_sentence_context(scan_text, chosen.start(), chosen.end())
+
+            findings.append(CriticalFinding(
+                term=normalized_term,
+                category=category,
+                severity=severity,
+                context=context,
+                negated=negated,
+            ))
 
         # Sort: critical first, then urgent, then significant; negated last
         severity_order = {"critical": 0, "urgent": 1, "significant": 2}

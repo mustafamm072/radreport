@@ -1,11 +1,14 @@
 """
-Tests for radreport-parser.
+Tests for radreport.
 Run with: pytest tests/ -v
 """
 
 import pytest
 
-from radreport_parser import ReportParser, CriticalFindingsDetector, FHIRExporter, RecommendationExtractor
+from radreport import (
+    ReportParser, CriticalFindingsDetector, FHIRExporter, RecommendationExtractor,
+    Deidentifier, deidentify,
+)
 
 # ---------------------------------------------------------------------------
 # Sample reports for testing
@@ -214,6 +217,46 @@ class TestCriticalFindingsDetector:
         assert "aortic dissection" in terms
         assert len(terms) > 20
 
+    def test_negated_mention_does_not_suppress_real_finding(self):
+        # A negated mention appearing BEFORE a real one must not suppress the
+        # real (active) finding — otherwise a true critical alert is dropped.
+        text = (
+            "FINDINGS:\n"
+            "No pneumothorax at the right apex. "
+            "A large pneumothorax is present at the left base."
+        )
+        report = self.parser.parse(text)
+        report = self.detector.detect(report)
+        pneumo = [cf for cf in report.critical_findings if cf.term == "pneumothorax"]
+        assert len(pneumo) == 1
+        assert pneumo[0].negated is False
+        assert "left base" in pneumo[0].context
+
+    def test_all_negated_reports_as_negated(self):
+        # If every mention is negated, the finding stays negated.
+        text = (
+            "FINDINGS:\n"
+            "No pneumothorax on the right. No pneumothorax on the left."
+        )
+        report = self.parser.parse(text)
+        report = self.detector.detect(report)
+        pneumo = [cf for cf in report.critical_findings if cf.term == "pneumothorax"]
+        assert len(pneumo) == 1
+        assert pneumo[0].negated is True
+
+    def test_negation_does_not_cross_sentence_boundary(self):
+        # A negation in a previous sentence must not negate a finding in the
+        # current sentence, even when within the character window.
+        text = (
+            "FINDINGS:\n"
+            "No acute hemorrhage. Large subdural hematoma is present."
+        )
+        report = self.parser.parse(text)
+        report = self.detector.detect(report)
+        sdh = [cf for cf in report.critical_findings if cf.term == "subdural hematoma"]
+        assert len(sdh) == 1
+        assert sdh[0].negated is False
+
 
 # ---------------------------------------------------------------------------
 # FHIR exporter tests
@@ -391,7 +434,7 @@ class TestCLI:
         import json
         from io import StringIO
         from contextlib import redirect_stdout
-        from radreport_parser.cli import main
+        from radreport.cli import main
 
         f = self._write_report("report.txt", CT_CHEST_REPORT)
         buf = StringIO()
@@ -405,7 +448,7 @@ class TestCLI:
         import json
         from io import StringIO
         from contextlib import redirect_stdout
-        from radreport_parser.cli import main
+        from radreport.cli import main
 
         f = self._write_report("report.txt", CT_CHEST_REPORT)
         buf = StringIO()
@@ -419,7 +462,7 @@ class TestCLI:
         import json
         from io import StringIO
         from contextlib import redirect_stdout
-        from radreport_parser.cli import main
+        from radreport.cli import main
 
         f1 = self._write_report("r1.txt", CT_CHEST_REPORT)
         f2 = self._write_report("r2.txt", NORMAL_XRAY_REPORT)
@@ -431,7 +474,7 @@ class TestCLI:
         assert len(result) == 2
 
     def test_cli_missing_file_exits(self):
-        from radreport_parser.cli import main
+        from radreport.cli import main
         with pytest.raises(SystemExit):
             main(["/nonexistent/path/report.txt"])
 
@@ -440,7 +483,7 @@ class TestCLI:
         from pathlib import Path
         from io import StringIO
         from contextlib import redirect_stdout, redirect_stderr
-        from radreport_parser.cli import main
+        from radreport.cli import main
 
         f = self._write_report("report.txt", NORMAL_XRAY_REPORT)
         out = str(Path(self.tmp) / "out.json")
@@ -455,7 +498,7 @@ class TestCLI:
         import json
         from io import StringIO
         from contextlib import redirect_stdout
-        from radreport_parser.cli import main
+        from radreport.cli import main
 
         f = self._write_report("report.txt", CT_CHEST_REPORT)
         buf = StringIO()
@@ -468,7 +511,7 @@ class TestCLI:
         import csv
         from io import StringIO
         from contextlib import redirect_stdout
-        from radreport_parser.cli import main
+        from radreport.cli import main
 
         f = self._write_report("report.txt", CT_CHEST_REPORT)
         buf = StringIO()
@@ -485,7 +528,7 @@ class TestCLI:
         import csv
         from io import StringIO
         from contextlib import redirect_stdout
-        from radreport_parser.cli import main
+        from radreport.cli import main
 
         f1 = self._write_report("r1.txt", CT_CHEST_REPORT)
         f2 = self._write_report("r2.txt", MRI_BRAIN_REPORT)
@@ -499,7 +542,7 @@ class TestCLI:
         assert "r2.txt" in filenames
 
     def test_cli_csv_fhir_conflict(self):
-        from radreport_parser.cli import main
+        from radreport.cli import main
         with pytest.raises(SystemExit):
             main(["somefile.txt", "--fhir", "--format", "csv"])
 
@@ -670,3 +713,183 @@ class TestToFlatDict:
         assert flat["follow_up_interval"] is None
         assert flat["follow_up_modality"] is None
         assert flat["follow_up_urgency"] is None
+
+
+# ---------------------------------------------------------------------------
+# De-identification tests
+# ---------------------------------------------------------------------------
+
+PHI_REPORT = """PATIENT NAME: John Q. Doe
+MRN: 12345678   Accession: A98765432
+Referring Physician: Dr. Jane Smith
+DOB: 03/10/1952   Exam date: March 5, 2024
+Phone: (555) 123-4567   Email: jdoe@example.com
+
+INDICATION: 94-year-old male with chest pain.
+
+FINDINGS:
+A pulmonary nodule measures 6 mm in the right upper lobe.
+Comparison to prior study dated 2024-01-02.
+Images available at http://pacs.hospital.org/study/123.
+"""
+
+
+class TestDeidentifier:
+
+    def setup_method(self):
+        self.deid = Deidentifier()
+
+    def test_redacts_common_phi(self):
+        result = self.deid.deidentify(PHI_REPORT)
+        text = result.text
+        assert "John Q. Doe" not in text
+        assert "12345678" not in text
+        assert "A98765432" not in text
+        assert "Dr. Jane Smith" not in text
+        assert "jdoe@example.com" not in text
+        assert "(555) 123-4567" not in text
+        assert "03/10/1952" not in text
+        assert "March 5, 2024" not in text
+        assert "2024-01-02" not in text
+        assert "http://pacs.hospital.org/study/123" not in text
+
+    def test_preserves_clinical_content(self):
+        # Measurements and findings must survive de-identification untouched.
+        result = self.deid.deidentify(PHI_REPORT)
+        assert "6 mm" in result.text
+        assert "pulmonary nodule" in result.text.lower()
+        assert "right upper lobe" in result.text.lower()
+
+    def test_age_over_89_redacted(self):
+        result = self.deid.deidentify("94-year-old male")
+        assert "94" not in result.text
+        assert "[AGE]" in result.text
+
+    def test_age_under_90_preserved(self):
+        # HIPAA only requires aggregating ages 90+. A 62-year-old stays.
+        result = self.deid.deidentify("62-year-old female")
+        assert "62-year-old" in result.text
+
+    def test_measurement_not_treated_as_phi(self):
+        result = self.deid.deidentify("Mass measures 90 mm in diameter.")
+        assert "90 mm" in result.text
+        assert result.redaction_count == 0
+
+    def test_placeholder_substituted(self):
+        result = self.deid.deidentify("Exam date: 03/10/2024.")
+        assert "[DATE]" in result.text
+
+    def test_redaction_offsets_map_to_original(self):
+        result = self.deid.deidentify(PHI_REPORT)
+        for r in result.redactions:
+            assert PHI_REPORT[r.start:r.end] == r.original
+
+    def test_redactions_non_overlapping_and_ordered(self):
+        result = self.deid.deidentify(PHI_REPORT)
+        last_end = -1
+        for r in result.redactions:
+            assert r.start >= last_end
+            last_end = r.end
+
+    def test_category_counts(self):
+        result = self.deid.deidentify(PHI_REPORT)
+        counts = result.category_counts()
+        assert counts.get("date", 0) >= 2
+        assert counts.get("email", 0) == 1
+        assert counts.get("mrn", 0) == 1
+        assert sum(counts.values()) == result.redaction_count
+
+    def test_ssn_redacted(self):
+        result = self.deid.deidentify("SSN 123-45-6789 on file.")
+        assert "123-45-6789" not in result.text
+        assert "[SSN]" in result.text
+
+    def test_no_phi_yields_no_redactions(self):
+        clean = "FINDINGS: The lungs are clear. Heart size normal."
+        result = self.deid.deidentify(clean)
+        assert result.redaction_count == 0
+        assert result.text == clean
+
+    def test_category_subset(self):
+        # Only redact dates; leave the SSN in place.
+        deid = Deidentifier(categories=["date"])
+        result = deid.deidentify("03/10/2024 SSN 123-45-6789")
+        assert "[DATE]" in result.text
+        assert "123-45-6789" in result.text
+
+    def test_custom_placeholder(self):
+        deid = Deidentifier(placeholders={"date": "<REDACTED>"})
+        result = deid.deidentify("Exam date: 03/10/2024.")
+        assert "<REDACTED>" in result.text
+
+    def test_unknown_category_raises(self):
+        with pytest.raises(ValueError):
+            Deidentifier(categories=["not_a_category"])
+
+    def test_none_text_raises(self):
+        with pytest.raises(ValueError):
+            self.deid.deidentify(None)
+
+    def test_module_convenience_function(self):
+        result = deidentify("Exam date: 03/10/2024.")
+        assert "[DATE]" in result.text
+
+    def test_result_to_dict(self):
+        result = self.deid.deidentify(PHI_REPORT)
+        d = result.to_dict()
+        assert "text" in d
+        assert "redaction_count" in d
+        assert "category_counts" in d
+        assert isinstance(d["redactions"], list)
+
+    def test_supported_categories(self):
+        cats = self.deid.supported_categories
+        assert "date" in cats
+        assert "name" in cats
+        assert "mrn" in cats
+
+    def test_header_label_preserves_label_redacts_value(self):
+        result = self.deid.deidentify("Patient Name: John Doe")
+        assert "Patient Name:" in result.text
+        assert "John Doe" not in result.text
+
+    def test_multi_field_header_line_split_by_category(self):
+        # A label value must stop at the column break so following fields on the
+        # same line are categorized correctly rather than swallowed as one name.
+        line = "PATIENT NAME: John Q. Doe    MRN: 12345678    Accession: A98765432"
+        result = self.deid.deidentify(line)
+        counts = result.category_counts()
+        assert counts.get("name") == 1
+        assert counts.get("mrn") == 1
+        assert counts.get("accession") == 1
+        assert "John Q. Doe" not in result.text
+        assert "12345678" not in result.text
+
+
+class TestDeidentifyCLI:
+
+    def setup_method(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+
+    def _write_report(self, name, text):
+        from pathlib import Path
+        p = Path(self.tmp) / name
+        p.write_text(text, encoding="utf-8")
+        return str(p)
+
+    def test_cli_deidentify_flag_scrubs_output(self):
+        import json
+        from io import StringIO
+        from contextlib import redirect_stdout, redirect_stderr
+        from radreport.cli import main
+
+        f = self._write_report("phi.txt", PHI_REPORT)
+        buf, err = StringIO(), StringIO()
+        with redirect_stdout(buf), redirect_stderr(err):
+            main([f, "--deidentify"])
+        result = json.loads(buf.getvalue())
+        # The raw text carried through the parsed output must be scrubbed.
+        blob = json.dumps(result)
+        assert "jdoe@example.com" not in blob
+        assert "12345678" not in blob

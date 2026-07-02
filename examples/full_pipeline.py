@@ -1,5 +1,5 @@
 """
-End-to-end example: radreport-parser full pipeline.
+End-to-end example: radreport full pipeline.
 Run from repo root: python examples/full_pipeline.py
 """
 
@@ -9,11 +9,16 @@ import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))  # repo root
 
-from radreport_parser import ReportParser, CriticalFindingsDetector, FHIRExporter
+from radreport import (
+    ReportParser, CriticalFindingsDetector, FHIRExporter, Deidentifier,
+)
 
 # ── Sample report ──────────────────────────────────────────────────────────────
 
 REPORT = """
+PATIENT NAME: John Q. Doe    MRN: 12345678    Accession: A98765432
+Referring Physician: Dr. Jane Smith    Exam date: March 5, 2024
+
 INDICATION: 58-year-old male with acute chest pain and shortness of breath.
 
 TECHNIQUE: CT pulmonary angiography with IV contrast, helical acquisition.
@@ -49,12 +54,27 @@ IMPRESSION:
 parser   = ReportParser()
 detector = CriticalFindingsDetector()
 exporter = FHIRExporter()
+deid     = Deidentifier()
 
 print("=" * 60)
+print("STEP 0: DE-IDENTIFY (PHI REDACTION)")
+print("=" * 60)
+
+deid_result = deid.deidentify(REPORT)
+print(f"\nRedacted {deid_result.redaction_count} PHI span(s): "
+      f"{deid_result.category_counts()}")
+print("\nScrubbed header:")
+for line in deid_result.text.strip().splitlines()[:2]:
+    print(f"  {line}")
+
+# Everything downstream operates on the de-identified text.
+clean_report_text = deid_result.text
+
+print("\n" + "=" * 60)
 print("STEP 1: PARSE")
 print("=" * 60)
 
-report = parser.parse(REPORT, modality="CT")
+report = parser.parse(clean_report_text, modality="CT")
 
 print(f"\nModality: {report.modality}")
 print(f"Sections found: {[s.name for s in report.sections]}")

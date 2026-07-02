@@ -3,15 +3,15 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "radreport-parser"
-version = "0.3.0"
-description = "Parse, structure, and export radiology free-text reports to FHIR"
+name = "radreport"
+version = "0.4.0"
+description = "Parse, de-identify, structure, and export radiology free-text reports to FHIR"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.9"
 authors = [{ name = "Mustafa Merchant", email = "mustafamerchant072@gmail.com" }]
-keywords = ["radiology", "DICOM", "FHIR", "medical imaging", "healthcare", "NLP"]
+keywords = ["radiology", "DICOM", "FHIR", "medical imaging", "healthcare", "NLP", "de-identification", "PHI", "HIPAA"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -28,18 +28,18 @@ classifiers = [
 dependencies = []
 
 [project.scripts]
-radreport = "radreport_parser.cli:main"
+radreport = "radreport.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov"]
 
 [project.urls]
-Homepage = "https://github.com/mustafamm072/radreport_parser"
-Documentation = "https://github.com/mustafamm072/radreport_parser#readme"
-Issues = "https://github.com/mustafamm072/radreport_parser/issues"
+Homepage = "https://github.com/mustafamm072/radreport"
+Documentation = "https://github.com/mustafamm072/radreport#readme"
+Issues = "https://github.com/mustafamm072/radreport/issues"
 
 [tool.setuptools.packages]
-find = { include = ["radreport_parser*"] }
+find = { include = ["radreport*"] }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

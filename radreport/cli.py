@@ -1,10 +1,11 @@
 """
-Command-line interface for radreport-parser.
+Command-line interface for radreport.
 
 Usage:
     radreport report.txt
     radreport report.txt --fhir --patient-id pt-001 --modality CT
     radreport reports/*.txt --critical --recommend --format csv -o batch.csv
+    radreport report.txt --deidentify
 """
 
 import argparse
@@ -14,17 +15,30 @@ import json
 import sys
 from pathlib import Path
 
-from . import ReportParser, CriticalFindingsDetector, FHIRExporter, RecommendationExtractor
+from . import (
+    ReportParser, CriticalFindingsDetector, FHIRExporter,
+    RecommendationExtractor, Deidentifier,
+)
 
 _parser = ReportParser()
 _detector = CriticalFindingsDetector()
 _extractor = RecommendationExtractor()
 _exporter = FHIRExporter()
+_deidentifier = Deidentifier()
 
 
-def _process(path: Path, modality, run_critical, run_recommend, as_fhir, patient_id):
+def _process(path: Path, modality, run_critical, run_recommend, as_fhir, patient_id,
+             run_deidentify=False):
     """Return (ParsedReport, output_dict). output_dict is FHIR when as_fhir=True."""
     text = path.read_text(encoding="utf-8")
+
+    if run_deidentify:
+        result = _deidentifier.deidentify(text)
+        if result.redaction_count:
+            print(f"[deid] {path.name}: redacted {result.redaction_count} span(s) "
+                  f"({result.category_counts()})", file=sys.stderr)
+        text = result.text
+
     report = _parser.parse(text, modality=modality)
 
     if run_critical:
@@ -60,6 +74,7 @@ examples:
   radreport report.txt
   radreport report.txt --fhir --patient-id pt-001 --modality CT
   radreport reports/*.txt --critical --recommend --format csv -o batch.csv
+  radreport report.txt --deidentify --critical
 """,
     )
     ap.add_argument("files", nargs="+", metavar="FILE",
@@ -70,6 +85,8 @@ examples:
                     help="Run critical findings detection")
     ap.add_argument("--recommend", "-r", action="store_true",
                     help="Extract follow-up imaging recommendations")
+    ap.add_argument("--deidentify", "-d", action="store_true",
+                    help="Redact PHI (dates, MRN, names, phone, …) before parsing")
     ap.add_argument("--fhir", "-f", action="store_true",
                     help="Export as FHIR R4 DiagnosticReport (implies --critical; not compatible with --format csv)")
     ap.add_argument("--patient-id", metavar="ID",
@@ -98,7 +115,8 @@ examples:
             errors.append(f"not found: {f}")
             continue
         try:
-            report_obj, out = _process(p, args.modality, run_critical, run_recommend, args.fhir, args.patient_id)
+            report_obj, out = _process(p, args.modality, run_critical, run_recommend,
+                                        args.fhir, args.patient_id, args.deidentify)
             if args.fmt == "csv":
                 flat = report_obj.to_flat_dict()
                 reports.append({"source_file": p.name, **flat})
