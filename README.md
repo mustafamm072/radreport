@@ -5,6 +5,7 @@
 [![PyPI](https://img.shields.io/pypi/v/radreport)](https://pypi.org/project/radreport/)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21147298.svg)](https://doi.org/10.5281/zenodo.21147298)
 
 Radiology reports come out as free-text PDFs. Downstream systems — EMRs, telehealth portals, billing platforms, research pipelines — need structured data. This library bridges that gap.
 
@@ -418,6 +419,23 @@ pytest tests/ -v
 - [ ] Template matching for common report types (Chest XR, CT Abdomen, MRI Brain)
 - [ ] Structured comparison / prior-study extraction (new / increased / stable / resolved)
 - [ ] Additional FHIR resource types (ImagingStudy, Condition)
+
+---
+
+## Citation
+
+If you use radreport in research, please cite it:
+
+```bibtex
+@software{merchant_radreport,
+  author  = {Merchant, Mustafa},
+  title   = {radreport: A rule-based Python library for parsing, de-identifying, and structuring radiology free-text reports to FHIR},
+  url     = {https://github.com/mustafamm072/radreport},
+  doi     = {10.5281/zenodo.21147298}
+}
+```
+
+See [CITATION.cff](CITATION.cff) for full citation metadata.
 
 ---
 
