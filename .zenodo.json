@@ -1,6 +1,6 @@
 {
-  "title": "radreport",
-  "description": "Parse, de-identify, structure, and export radiology free-text reports to FHIR. Rule-based, zero-dependency extraction of sections, measurements, critical findings, follow-up recommendations, and PHI redaction.",
+  "title": "radreport: A rule-based Python library for parsing, de-identifying, and structuring radiology free-text reports to FHIR",
+  "description": "<p>radreport is a zero-dependency Python library and CLI that converts unstructured radiology free-text reports into structured, machine-readable data. It is designed for EMRs, telehealth platforms, billing systems, and research/analytics pipelines that need clean structured data from raw dictated or transcribed report text &mdash; without relying on ML models, GPUs, or external services.</p><p><strong>What it does:</strong></p><ol><li><strong>Parse</strong> &mdash; splits any free-text radiology report into labeled sections (Indication, Technique, Findings, Impression, etc.), extracts measurements, and links findings to anatomical structures.</li><li><strong>Detect</strong> &mdash; flags critical/urgent findings (e.g. pulmonary embolism, pneumothorax, hemorrhage) with negation- and sentence-boundary-aware logic, so &ldquo;no pneumothorax&rdquo; is never mistaken for a positive finding.</li><li><strong>De-identify</strong> &mdash; redacts PHI (dates, ages 90+, SSNs, MRNs, accession numbers, phone/fax numbers, emails, URLs, IP addresses, ZIP codes, and titled/labeled names) with a full, offset-based audit trail, so reports can safely leave a controlled environment for research or analytics use.</li><li><strong>Export</strong> &mdash; outputs FHIR R4 DiagnosticReport resources ready to load into any EMR or health information system.</li></ol><p><strong>Why it exists:</strong> Radiology reports are produced as free text (often via PDF or dictation transcripts), but downstream systems need structured data. Existing solutions typically require ML pipelines, cloud NLP services, or GPUs &mdash; impractical for many hospital IT environments with strict data-residency and vendor-approval constraints. radreport is entirely rule-based, has zero required dependencies, and runs anywhere Python 3.9+ runs, making it straightforward to pass hospital IT and security review.</p><p><strong>Key features:</strong> section parsing with mid-sentence-safe header detection; measurement extraction linked to anatomy; critical/urgent findings detection with negation awareness; follow-up imaging recommendation extraction; PHI de-identification with reproducible, reviewable audit trails; FHIR R4 export; a CLI for single-file and batch processing with JSON and flat CSV output; 90+ unit tests; MIT licensed.</p><p>Install: <code>pip install radreport</code></p><p>Source code: https://github.com/mustafamm072/radreport &mdash; PyPI: https://pypi.org/project/radreport/</p>",
   "license": "MIT",
   "upload_type": "software",
   "access_right": "open",
@@ -9,7 +9,11 @@
     "FHIR",
     "medical imaging",
     "healthcare",
-    "NLP"
+    "NLP",
+    "de-identification",
+    "PHI",
+    "HIPAA",
+    "DICOM"
   ],
   "creators": [
     {
