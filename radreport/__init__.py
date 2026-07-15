@@ -29,6 +29,7 @@ from .critical_findings import CriticalFindingsDetector
 from .recommendation_extractor import RecommendationExtractor
 from .fhir_exporter import FHIRExporter
 from .deidentifier import Deidentifier, deidentify
+from .report_comparator import ReportComparator, compare_reports
 from .report_schema import (
     ParsedReport,
     ReportSection,
@@ -38,9 +39,11 @@ from .report_schema import (
     FollowUpRecommendation,
     Redaction,
     DeidentificationResult,
+    FindingComparison,
+    ComparisonResult,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     "ReportParser",
     "CriticalFindingsDetector",
@@ -48,6 +51,8 @@ __all__ = [
     "FHIRExporter",
     "Deidentifier",
     "deidentify",
+    "ReportComparator",
+    "compare_reports",
     "ParsedReport",
     "ReportSection",
     "Finding",
@@ -56,5 +61,7 @@ __all__ = [
     "FollowUpRecommendation",
     "Redaction",
     "DeidentificationResult",
+    "FindingComparison",
+    "ComparisonResult",
     "__version__",
 ]

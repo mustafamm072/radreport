@@ -7,7 +7,7 @@ import pytest
 
 from radreport import (
     ReportParser, CriticalFindingsDetector, FHIRExporter, RecommendationExtractor,
-    Deidentifier, deidentify,
+    Deidentifier, deidentify, ReportComparator, compare_reports,
 )
 
 # ---------------------------------------------------------------------------
@@ -893,3 +893,167 @@ class TestDeidentifyCLI:
         blob = json.dumps(result)
         assert "jdoe@example.com" not in blob
         assert "12345678" not in blob
+
+
+# ---------------------------------------------------------------------------
+# Interval-change comparison (ReportComparator)
+# ---------------------------------------------------------------------------
+
+PRIOR_STUDY = """
+FINDINGS:
+Right upper lobe pulmonary nodule measuring 6 mm.
+Liver lesion measuring 1.2 cm in segment VI.
+Enlarged mediastinal lymph node measuring 15 mm.
+"""
+
+CURRENT_STUDY = """
+FINDINGS:
+Right upper lobe pulmonary nodule measuring 9 mm, enlarged.
+Liver lesion measuring 1.2 cm in segment VI, unchanged.
+New 8 mm right adrenal nodule.
+"""
+
+
+class TestReportComparator:
+
+    def setup_method(self):
+        self.parser = ReportParser()
+        self.comparator = ReportComparator()
+
+    def _compare(self, current, prior):
+        cur = self.parser.parse(current, modality="CT")
+        pri = self.parser.parse(prior, modality="CT")
+        return self.comparator.compare(cur, pri)
+
+    def test_growing_lesion_flagged_increased(self):
+        result = self._compare(CURRENT_STUDY, PRIOR_STUDY)
+        inc = result.by_status("increased")
+        assert len(inc) == 1
+        c = inc[0]
+        assert c.prior_mm == 6.0
+        assert c.current_mm == 9.0
+        assert c.delta_mm == 3.0
+        assert c.percent_change == 50.0
+
+    def test_new_lesion_detected(self):
+        result = self._compare(CURRENT_STUDY, PRIOR_STUDY)
+        new = result.by_status("new")
+        assert len(new) == 1
+        assert new[0].current_mm == 8.0
+        assert new[0].prior_mm is None
+
+    def test_stable_lesion(self):
+        result = self._compare(CURRENT_STUDY, PRIOR_STUDY)
+        stable = result.by_status("stable")
+        assert len(stable) == 1
+        assert stable[0].delta_mm == 0.0
+
+    def test_resolved_lesion(self):
+        # The lymph node in the prior has no match in the current study.
+        result = self._compare(CURRENT_STUDY, PRIOR_STUDY)
+        resolved = result.by_status("resolved")
+        assert len(resolved) == 1
+        assert resolved[0].prior_mm == 15.0
+        assert resolved[0].current_mm is None
+
+    def test_has_progression_true_when_growth(self):
+        result = self._compare(CURRENT_STUDY, PRIOR_STUDY)
+        assert result.has_progression is True
+
+    def test_shrinking_lesion_flagged_decreased(self):
+        prior = "FINDINGS:\nMass measuring 30 mm in the right lobe."
+        current = "FINDINGS:\nMass measuring 20 mm in the right lobe."
+        result = self._compare(current, prior)
+        dec = result.by_status("decreased")
+        assert len(dec) == 1
+        assert dec[0].delta_mm == -10.0
+        assert dec[0].percent_change < 0
+
+    def test_small_change_within_threshold_is_stable(self):
+        # 1 mm change on an 8 mm nodule clears neither the 2 mm nor 20% bar.
+        prior = "FINDINGS:\nPulmonary nodule measuring 8 mm."
+        current = "FINDINGS:\nPulmonary nodule measuring 9 mm."
+        result = self._compare(current, prior)
+        assert result.by_status("stable")
+        assert not result.by_status("increased")
+
+    def test_custom_thresholds(self):
+        prior = "FINDINGS:\nPulmonary nodule measuring 8 mm."
+        current = "FINDINGS:\nPulmonary nodule measuring 9 mm."
+        # Lower both thresholds so a 1 mm / 12.5% change registers.
+        comp = ReportComparator(min_abs_mm=1.0, min_pct=10.0)
+        cur = self.parser.parse(current)
+        pri = self.parser.parse(prior)
+        result = comp.compare(cur, pri)
+        assert result.by_status("increased")
+
+    def test_unmeasured_findings_are_ignored(self):
+        # No measurements anywhere → nothing trackable → empty comparison.
+        prior = "FINDINGS:\nNo pneumothorax. Clear lungs."
+        current = "FINDINGS:\nNo pneumothorax. Clear lungs."
+        result = self._compare(current, prior)
+        assert result.comparisons == []
+
+    def test_status_counts(self):
+        result = self._compare(CURRENT_STUDY, PRIOR_STUDY)
+        counts = result.status_counts()
+        assert counts.get("increased") == 1
+        assert counts.get("new") == 1
+        assert counts.get("stable") == 1
+        assert counts.get("resolved") == 1
+
+    def test_to_dict_shape(self):
+        result = self._compare(CURRENT_STUDY, PRIOR_STUDY)
+        d = result.to_dict()
+        assert set(d.keys()) == {"status_counts", "has_progression", "comparisons"}
+        assert isinstance(d["comparisons"], list)
+        assert set(d["comparisons"][0].keys()) == {
+            "status", "anatomy", "current_text", "prior_text",
+            "current_mm", "prior_mm", "delta_mm", "percent_change", "match_score",
+        }
+
+    def test_convenience_wrapper(self):
+        result = compare_reports(CURRENT_STUDY, PRIOR_STUDY, modality="CT")
+        assert result.has_progression is True
+
+
+class TestCompareCLI:
+
+    def setup_method(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+
+    def _write(self, name, text):
+        from pathlib import Path
+        p = Path(self.tmp) / name
+        p.write_text(text, encoding="utf-8")
+        return str(p)
+
+    def test_cli_compare_outputs_interval_change(self):
+        import json
+        from io import StringIO
+        from contextlib import redirect_stdout, redirect_stderr
+        from radreport.cli import main
+
+        cur = self._write("current.txt", CURRENT_STUDY)
+        pri = self._write("prior.txt", PRIOR_STUDY)
+        buf, err = StringIO(), StringIO()
+        with redirect_stdout(buf), redirect_stderr(err):
+            main([cur, "--compare", pri, "--modality", "CT"])
+        result = json.loads(buf.getvalue())
+        assert result["has_progression"] is True
+        assert result["current_file"] == "current.txt"
+        assert result["prior_file"] == "prior.txt"
+        assert result["status_counts"].get("increased") == 1
+
+    def test_cli_compare_rejects_multiple_current_files(self):
+        from io import StringIO
+        from contextlib import redirect_stderr
+        from radreport.cli import main
+
+        a = self._write("a.txt", CURRENT_STUDY)
+        b = self._write("b.txt", CURRENT_STUDY)
+        pri = self._write("prior.txt", PRIOR_STUDY)
+        with redirect_stderr(StringIO()):
+            with pytest.raises(SystemExit):
+                main([a, b, "--compare", pri])

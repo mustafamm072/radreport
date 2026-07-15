@@ -132,6 +132,78 @@ class DeidentificationResult:
 
 
 @dataclass
+class FindingComparison:
+    """
+    A single trackable finding compared against a prior study.
+
+    `status` uses the standard radiology interval-change vocabulary:
+      "new"       — present now, no match in the prior study
+      "increased" — matched, largest dimension grew past the change thresholds
+      "decreased" — matched, largest dimension shrank past the change thresholds
+      "stable"    — matched, change within thresholds (no meaningful interval change)
+      "resolved"  — present in the prior study, no match now
+
+    Measurements are the largest dimension of the finding, normalized to mm.
+    `delta_mm` and `percent_change` are current relative to prior (positive =
+    growth). They are None for "new"/"resolved" or when a side lacks a
+    measurement.
+    """
+    status: str
+    anatomy: Optional[str] = None
+    current_text: Optional[str] = None
+    prior_text: Optional[str] = None
+    current_mm: Optional[float] = None
+    prior_mm: Optional[float] = None
+    delta_mm: Optional[float] = None
+    percent_change: Optional[float] = None
+    match_score: Optional[float] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "status": self.status,
+            "anatomy": self.anatomy,
+            "current_text": self.current_text,
+            "prior_text": self.prior_text,
+            "current_mm": self.current_mm,
+            "prior_mm": self.prior_mm,
+            "delta_mm": self.delta_mm,
+            "percent_change": self.percent_change,
+            "match_score": self.match_score,
+        }
+
+
+@dataclass
+class ComparisonResult:
+    """
+    Output of ReportComparator.compare(). An interval-change summary between a
+    current study and a prior one, expressed as a list of FindingComparison
+    objects (one per trackable/measurable finding on either side).
+    """
+    comparisons: list["FindingComparison"] = field(default_factory=list)
+
+    def by_status(self, status: str) -> list["FindingComparison"]:
+        return [c for c in self.comparisons if c.status == status]
+
+    def status_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for c in self.comparisons:
+            counts[c.status] = counts.get(c.status, 0) + 1
+        return counts
+
+    @property
+    def has_progression(self) -> bool:
+        """True if any finding is new or increased — the clinically worrying cases."""
+        return any(c.status in ("new", "increased") for c in self.comparisons)
+
+    def to_dict(self) -> dict:
+        return {
+            "status_counts": self.status_counts(),
+            "has_progression": self.has_progression,
+            "comparisons": [c.to_dict() for c in self.comparisons],
+        }
+
+
+@dataclass
 class CriticalFinding:
     """A flagged critical / urgent finding."""
     term: str               # The keyword that triggered the flag

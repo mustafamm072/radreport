@@ -9,12 +9,13 @@
 
 Radiology reports come out as free-text PDFs. Downstream systems — EMRs, telehealth portals, billing platforms, research pipelines — need structured data. This library bridges that gap.
 
-Four things it does well:
+Five things it does well:
 
 1. **Parse** — splits any free-text report into labeled sections, extracts measurements, links findings to anatomy
 2. **Detect** — flags critical/urgent findings with negation awareness (no false alerts for "no pneumothorax")
-3. **De-identify** — redacts PHI (dates, MRNs, names, contact info…) with a full audit trail, so reports can leave a controlled environment for research
-4. **Export** — outputs FHIR R4 DiagnosticReport resources ready for any EMR
+3. **Compare** — measures interval change against a prior study (new / increased / decreased / stable / resolved) — *is the lesion growing?*
+4. **De-identify** — redacts PHI (dates, MRNs, names, contact info…) with a full audit trail, so reports can leave a controlled environment for research
+5. **Export** — outputs FHIR R4 DiagnosticReport resources ready for any EMR
 
 ---
 
@@ -91,6 +92,9 @@ radreport report.txt --critical --recommend
 # Redact PHI before parsing (safe to store/share the output)
 radreport report.txt --deidentify --critical
 
+# Compare a follow-up study against the prior — is anything growing?
+radreport current.txt --compare prior.txt --modality CT
+
 # Batch process multiple files → JSON array
 radreport reports/*.txt --critical -o batch.json
 
@@ -109,6 +113,7 @@ radreport reports/*.txt --critical --recommend --format csv -o cohort.csv
 | `--critical` | `-c` | Run critical findings detection |
 | `--recommend` | `-r` | Extract follow-up imaging recommendations |
 | `--deidentify` | `-d` | Redact PHI (dates, MRN, names, phone…) before parsing |
+| `--compare PRIOR` | | Compare the input report against a prior study and report interval change (JSON) |
 | `--fhir` | `-f` | Export as FHIR R4 DiagnosticReport (implies --critical) |
 | `--patient-id ID` | | FHIR Patient resource ID (used with `--fhir`) |
 | `--format FMT` | `--fmt` | Output format: `json` (default) or `csv` (not compatible with `--fhir`) |
@@ -265,6 +270,72 @@ Identical recommendations are deduplicated.
 
 ---
 
+## Interval Change (Prior Comparison)
+
+The most common question asked of a follow-up study is *"is the lesion
+growing?"* `ReportComparator` answers it: give it a current report and a prior
+one, and it classifies every **measurable** finding using the standard radiology
+interval-change vocabulary — **new**, **increased**, **decreased**, **stable**,
+or **resolved**. This is the structured backbone of tumor-response
+(RECIST-style) and nodule-surveillance (Fleischner-style) workflows.
+
+```python
+from radreport import compare_reports
+
+result = compare_reports(current_text, prior_text, modality="CT")
+
+for c in result.comparisons:
+    if c.status in ("increased", "decreased"):
+        print(f"{c.anatomy}: {c.prior_mm} → {c.current_mm} mm "
+              f"({c.percent_change:+.0f}%) [{c.status}]")
+    else:
+        print(f"{c.anatomy}: {c.status}")
+
+print("Progression:", result.has_progression)   # True if anything is new or increased
+print(result.status_counts())                    # {"increased": 1, "new": 1, "stable": 1, ...}
+```
+
+Or drive it from parsed reports directly:
+
+```python
+from radreport import ReportParser, ReportComparator
+
+parser = ReportParser()
+current = parser.parse(current_text, modality="CT")
+prior   = parser.parse(prior_text, modality="CT")
+
+result = ReportComparator().compare(current, prior)
+```
+
+### How matching works
+
+- Only findings that carry an **extractable measurement** (a nodule, mass, node,
+  or effusion with a size) are tracked — qualitative statements can't be matched
+  reliably from text alone, so they're intentionally out of scope.
+- Findings are paired across the two studies by a transparent **anatomy +
+  token-overlap** score. Matching is greedy and one-to-one; leftovers on the
+  current side become `new` and leftovers on the prior side become `resolved`.
+- A change is only called `increased` / `decreased` when it clears **both** an
+  absolute and a relative threshold (defaults: **2 mm** and **20%**). This
+  suppresses measurement jitter on small lesions. Everything else is `stable`.
+
+### Tuning thresholds
+
+```python
+# Stricter growth call: require 3 mm AND 30% change; looser matching.
+comparator = ReportComparator(min_abs_mm=3.0, min_pct=30.0, min_match_score=0.15)
+```
+
+Every `FindingComparison` is fully auditable — it records the `prior_text`,
+`current_text`, both largest dimensions, the `delta_mm`, the `percent_change`,
+and the `match_score` it was derived from.
+
+> **Decision support only.** Interval-change classification assists human review;
+> it does not replace a radiologist directly comparing the images, and the
+> default thresholds are generic, not a certified society guideline.
+
+---
+
 ## De-identification
 
 Strip Protected Health Information (PHI) from a report before it leaves a
@@ -416,8 +487,8 @@ pytest tests/ -v
 - [x] Structured output for follow-up recommendations (`RecommendationExtractor`)
 - [x] CSV export mode for research/analytics workflows (`--format csv`)
 - [x] Rule-based PHI de-identification with audit trail (`Deidentifier`)
+- [x] Structured comparison / prior-study extraction (new / increased / decreased / stable / resolved) — `ReportComparator`
 - [ ] Template matching for common report types (Chest XR, CT Abdomen, MRI Brain)
-- [ ] Structured comparison / prior-study extraction (new / increased / stable / resolved)
 - [ ] Additional FHIR resource types (ImagingStudy, Condition)
 
 ---

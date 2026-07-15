@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import (
     ReportParser, CriticalFindingsDetector, FHIRExporter,
-    RecommendationExtractor, Deidentifier,
+    RecommendationExtractor, Deidentifier, ReportComparator,
 )
 
 _parser = ReportParser()
@@ -25,6 +25,7 @@ _detector = CriticalFindingsDetector()
 _extractor = RecommendationExtractor()
 _exporter = FHIRExporter()
 _deidentifier = Deidentifier()
+_comparator = ReportComparator()
 
 
 def _process(path: Path, modality, run_critical, run_recommend, as_fhir, patient_id,
@@ -64,6 +65,47 @@ def _to_csv(rows: list[dict]) -> str:
     return buf.getvalue()
 
 
+def _read_report_text(path: Path, run_deidentify: bool) -> str:
+    text = path.read_text(encoding="utf-8")
+    if run_deidentify:
+        result = _deidentifier.deidentify(text)
+        if result.redaction_count:
+            print(f"[deid] {path.name}: redacted {result.redaction_count} span(s) "
+                  f"({result.category_counts()})", file=sys.stderr)
+        text = result.text
+    return text
+
+
+def _run_compare(ap, args) -> None:
+    """Interval-change mode: compare a single current report against a prior study."""
+    if len(args.files) != 1:
+        ap.error("--compare requires exactly one input FILE (the current study)")
+
+    current_path = Path(args.files[0])
+    prior_path = Path(args.compare)
+    for p in (current_path, prior_path):
+        if not p.is_file():
+            print(f"[error] not found: {p}", file=sys.stderr)
+            sys.exit(1)
+
+    current = _parser.parse(
+        _read_report_text(current_path, args.deidentify), modality=args.modality)
+    prior = _parser.parse(
+        _read_report_text(prior_path, args.deidentify), modality=args.modality)
+
+    result = _comparator.compare(current, prior)
+    out = result.to_dict()
+    out["current_file"] = current_path.name
+    out["prior_file"] = prior_path.name
+    output_str = json.dumps(out, indent=2)
+
+    if args.output:
+        Path(args.output).write_text(output_str, encoding="utf-8")
+        print(f"Written to {args.output}", file=sys.stderr)
+    else:
+        print(output_str)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="radreport",
@@ -75,6 +117,7 @@ examples:
   radreport report.txt --fhir --patient-id pt-001 --modality CT
   radreport reports/*.txt --critical --recommend --format csv -o batch.csv
   radreport report.txt --deidentify --critical
+  radreport current.txt --compare prior.txt --modality CT
 """,
     )
     ap.add_argument("files", nargs="+", metavar="FILE",
@@ -87,6 +130,10 @@ examples:
                     help="Extract follow-up imaging recommendations")
     ap.add_argument("--deidentify", "-d", action="store_true",
                     help="Redact PHI (dates, MRN, names, phone, …) before parsing")
+    ap.add_argument("--compare", metavar="PRIOR",
+                    help="Compare the input report against a PRIOR study .txt and "
+                         "report interval change (new/increased/decreased/stable/"
+                         "resolved). Requires a single input FILE; outputs JSON.")
     ap.add_argument("--fhir", "-f", action="store_true",
                     help="Export as FHIR R4 DiagnosticReport (implies --critical; not compatible with --format csv)")
     ap.add_argument("--patient-id", metavar="ID",
@@ -101,6 +148,9 @@ examples:
 
     if args.fmt == "csv" and args.fhir:
         ap.error("--format csv is not compatible with --fhir")
+
+    if args.compare:
+        return _run_compare(ap, args)
 
     run_critical = args.critical or args.fhir
     run_recommend = args.recommend

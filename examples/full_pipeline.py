@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))  # repo root
 
 from radreport import (
     ReportParser, CriticalFindingsDetector, FHIRExporter, Deidentifier,
+    ReportComparator,
 )
 
 # ── Sample report ──────────────────────────────────────────────────────────────
@@ -130,4 +131,36 @@ with open(output_path, "w") as f:
     json.dump(fhir, f, indent=2)
 
 print(f"\nFull FHIR JSON written to: {output_path}")
+
+print("\n" + "=" * 60)
+print("STEP 4: INTERVAL CHANGE vs PRIOR STUDY")
+print("=" * 60)
+
+# A follow-up CT performed some months later. Same patient, new numbers.
+PRIOR = """
+FINDINGS:
+Right upper lobe pulmonary nodule measuring 4 mm.
+No adrenal nodule.
+"""
+
+FOLLOW_UP = """
+FINDINGS:
+Right upper lobe pulmonary nodule measuring 7 mm, interval enlargement.
+New 9 mm left adrenal nodule.
+"""
+
+comparator = ReportComparator()
+prior_report  = parser.parse(PRIOR, modality="CT")
+follow_report = parser.parse(FOLLOW_UP, modality="CT")
+change = comparator.compare(follow_report, prior_report)
+
+print(f"\nStatus counts : {change.status_counts()}")
+print(f"Progression   : {change.has_progression}")
+for c in change.comparisons:
+    if c.prior_mm is not None and c.current_mm is not None:
+        detail = f"{c.prior_mm} → {c.current_mm} mm ({c.percent_change:+.0f}%)"
+    else:
+        detail = f"{c.current_mm or c.prior_mm} mm"
+    print(f"  [{c.status:9s}] {c.anatomy or 'unspecified':12s} {detail}")
+
 print("\nDone.")

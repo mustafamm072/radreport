@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented here.
 
+## [0.5.0] - 2026-07-14
+
+### Added
+- **Interval-change comparison (`ReportComparator`).** Compares a current report
+  against a prior study and classifies every *measurable* finding with the
+  standard radiology vocabulary: **new / increased / decreased / stable /
+  resolved**. This answers the central question of any follow-up study — *is the
+  lesion growing?* — the basis of tumor-response (RECIST-style) and nodule
+  surveillance (Fleischner-style) workflows.
+  - Rule-based and fully auditable: findings are paired across studies by a
+    transparent anatomy + token-overlap score, and each `FindingComparison`
+    records the prior/current text, largest dimensions, absolute delta, and
+    percent change it was derived from. No ML, no embeddings, no external calls.
+  - Change is only called "increased"/"decreased" when it clears **both** an
+    absolute (default 2 mm) and a relative (default 20%) threshold, suppressing
+    measurement jitter on small lesions. All thresholds are constructor-configurable.
+  - New schema types `FindingComparison` and `ComparisonResult`
+    (`.status_counts()`, `.by_status()`, `.has_progression`, `.to_dict()`).
+  - Convenience wrapper `compare_reports(current_text, prior_text, modality=...)`
+    and top-level exports of `ReportComparator`, `compare_reports`,
+    `FindingComparison`, and `ComparisonResult`.
+- **CLI `--compare PRIOR`.** Compares a single input report against a prior study
+  file and prints the interval-change summary as JSON.
+
 ## [0.4.0] - 2026-07-01
 
 ### Added
