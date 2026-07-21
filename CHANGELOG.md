@@ -2,6 +2,41 @@
 
 All notable changes to this project are documented here.
 
+## [0.6.0] - 2026-07-20
+
+### Added
+- **Structured report templates & completeness checking (`TemplateMatcher`).**
+  Checks whether a report actually addressed the anatomic structures expected
+  for its study type — the free-text analogue of structured-reporting
+  checklists (RSNA RadReport / ACR-style). Given a parsed report it (1) picks
+  the best-fit template by modality + body-region keywords, or uses a template
+  you name, and (2) reports, item by item, whether each expected structure was
+  covered, with an overall `completeness` score.
+  - Ships five built-in templates: Chest Radiograph (`chest_xr`), CT Chest
+    (`ct_chest`), CT Abdomen and Pelvis (`ct_abdomen_pelvis`), CT Head
+    (`ct_head`), and MRI Brain (`mri_brain`).
+  - Rule-based and fully auditable: every coverage decision records the exact
+    keyword that matched. No ML, no external calls. Templates are checked only
+    against the findings/impression text, so a structure named in the clinical
+    history alone does not count as "addressed".
+  - Optional items (e.g. contrast enhancement) do not count against
+    completeness when absent. Registry is extensible — pass your own templates
+    to `TemplateMatcher(templates=...)` without mutating the built-ins.
+  - New schema types `TemplateItemResult` and `TemplateMatch`
+    (`.completeness`, `.missing_items`, `.covered_items`, `.is_complete`,
+    `.to_dict()`, `.to_flat_dict()`); definition types `ReportTemplate` and
+    `TemplateItem`; and the `TEMPLATES` registry.
+  - Convenience wrapper `match_template(text, template="auto", modality=...)`
+    and top-level exports of all of the above.
+- **CLI `--template [NAME]` and `--list-templates`.** `--template` with a key
+  (or no value to auto-select) adds a `template` block to JSON output and
+  completeness columns to CSV output; `--list-templates` prints the available
+  template keys.
+
+Non-breaking: existing schemas and their `to_dict`/`to_flat_dict` output are
+unchanged. Template matching is a separate, opt-in step that returns its own
+result object and never mutates `ParsedReport`.
+
 ## [0.5.0] - 2026-07-14
 
 ### Added

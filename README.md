@@ -9,13 +9,14 @@
 
 Radiology reports come out as free-text PDFs. Downstream systems — EMRs, telehealth portals, billing platforms, research pipelines — need structured data. This library bridges that gap.
 
-Five things it does well:
+Six things it does well:
 
 1. **Parse** — splits any free-text report into labeled sections, extracts measurements, links findings to anatomy
 2. **Detect** — flags critical/urgent findings with negation awareness (no false alerts for "no pneumothorax")
 3. **Compare** — measures interval change against a prior study (new / increased / decreased / stable / resolved) — *is the lesion growing?*
-4. **De-identify** — redacts PHI (dates, MRNs, names, contact info…) with a full audit trail, so reports can leave a controlled environment for research
-5. **Export** — outputs FHIR R4 DiagnosticReport resources ready for any EMR
+4. **Check** — scores a report's completeness against a structured template for its study type — *did it cover every organ it should have?*
+5. **De-identify** — redacts PHI (dates, MRNs, names, contact info…) with a full audit trail, so reports can leave a controlled environment for research
+6. **Export** — outputs FHIR R4 DiagnosticReport resources ready for any EMR
 
 ---
 
@@ -95,6 +96,11 @@ radreport report.txt --deidentify --critical
 # Compare a follow-up study against the prior — is anything growing?
 radreport current.txt --compare prior.txt --modality CT
 
+# Check completeness against a structured template (auto-selects the study type)
+radreport report.txt --template
+radreport report.txt --template ct_abdomen_pelvis
+radreport --list-templates
+
 # Batch process multiple files → JSON array
 radreport reports/*.txt --critical -o batch.json
 
@@ -114,6 +120,8 @@ radreport reports/*.txt --critical --recommend --format csv -o cohort.csv
 | `--recommend` | `-r` | Extract follow-up imaging recommendations |
 | `--deidentify` | `-d` | Redact PHI (dates, MRN, names, phone…) before parsing |
 | `--compare PRIOR` | | Compare the input report against a prior study and report interval change (JSON) |
+| `--template [NAME]` | | Check completeness against a report template; omit NAME to auto-select. Adds a `template` block to JSON / completeness columns to CSV |
+| `--list-templates` | | List available template keys and exit |
 | `--fhir` | `-f` | Export as FHIR R4 DiagnosticReport (implies --critical) |
 | `--patient-id ID` | | FHIR Patient resource ID (used with `--fhir`) |
 | `--format FMT` | `--fmt` | Output format: `json` (default) or `csv` (not compatible with `--fhir`) |
@@ -336,6 +344,92 @@ and the `match_score` it was derived from.
 
 ---
 
+## Report Templates & Completeness
+
+A report of a given study type is expected to address a known set of anatomic
+structures — a chest radiograph should comment on the lungs, pleura, heart,
+mediastinum, and bones; a CT abdomen/pelvis should cover the solid organs,
+bowel, and vasculature. `TemplateMatcher` brings that structured-reporting
+checklist to free text: it picks the best-fit template for a report, then
+checks — item by item — whether each expected structure was actually addressed,
+and produces an overall **completeness** score.
+
+```python
+from radreport import match_template
+
+match = match_template(report_text, modality="CT")   # template="auto" by default
+
+print(match.template_key)                      # → "ct_abdomen_pelvis"
+print(match.completeness)                       # → 0.85  (fraction of required items covered)
+print([i.key for i in match.missing_items])     # → ["pancreas"]  (required, not mentioned)
+
+for item in match.covered_items:
+    print(f"{item.label}: matched on '{item.matched_keyword}'")
+```
+
+Or drive it from a parsed report and name the template explicitly:
+
+```python
+from radreport import ReportParser, TemplateMatcher
+
+report = ReportParser().parse(report_text, modality="CT")
+match  = TemplateMatcher().match(report, template="ct_chest")
+```
+
+### Built-in templates
+
+| Key | Study type |
+|-----|------------|
+| `chest_xr` | Chest Radiograph |
+| `ct_chest` | CT Chest |
+| `ct_abdomen_pelvis` | CT Abdomen and Pelvis |
+| `ct_head` | CT Head (non-contrast) |
+| `mri_brain` | MRI Brain |
+
+`TemplateMatcher().available` lists the keys at runtime.
+
+### How it works
+
+- **Auto-selection** scores each template by modality agreement plus how many of
+  its body-region keywords appear in the report; the highest scorer wins. Pass an
+  explicit `template=` key to skip classification. `match.classification_score`
+  records the confidence of an auto-selection.
+- **Coverage** is checked only against the **findings and impression** text, so a
+  structure named only in the clinical history does not count as "addressed".
+  Each item records the exact keyword it matched on — fully auditable.
+- **Completeness** is the fraction of *required* items that were covered.
+  **Optional** items (e.g. contrast enhancement, incidental free fluid) never
+  count against the score when absent.
+
+### Custom templates
+
+```python
+from radreport import TemplateMatcher, ReportTemplate, TemplateItem
+
+mammo = ReportTemplate(
+    key="mammography",
+    name="Screening Mammography",
+    modalities=("MG", "XR"),
+    classifier_keywords=("breast", "mammograph", "calcification"),
+    items=(
+        TemplateItem("masses", "Masses", ("mass", "masses", "nodule")),
+        TemplateItem("calcifications", "Calcifications", ("calcification", "calcifications")),
+        TemplateItem("density", "Breast density", ("density", "dense")),
+        TemplateItem("birads", "BI-RADS", ("bi-rads", "birads"), required=False),
+    ),
+)
+
+# Add to the built-ins without mutating the global registry:
+from radreport import TEMPLATES
+matcher = TemplateMatcher(templates={**TEMPLATES, "mammography": mammo})
+```
+
+> **Textual signal only.** Completeness reflects whether a structure was
+> *mentioned*, not whether it was evaluated correctly. It assists QA and cohort
+> validation; it is not a judgement of diagnostic quality.
+
+---
+
 ## De-identification
 
 Strip Protected Health Information (PHI) from a report before it leaves a
@@ -488,8 +582,14 @@ pytest tests/ -v
 - [x] CSV export mode for research/analytics workflows (`--format csv`)
 - [x] Rule-based PHI de-identification with audit trail (`Deidentifier`)
 - [x] Structured comparison / prior-study extraction (new / increased / decreased / stable / resolved) — `ReportComparator`
-- [ ] Template matching for common report types (Chest XR, CT Abdomen, MRI Brain)
-- [ ] Additional FHIR resource types (ImagingStudy, Condition)
+- [x] Template matching & completeness checking for common report types (Chest XR, CT Chest, CT Abdomen/Pelvis, CT Head, MRI Brain) — `TemplateMatcher`
+- [ ] Additional FHIR resource types (ImagingStudy, Condition, Observation with body-site codes)
+- [ ] BI-RADS / Lung-RADS / TI-RADS structured category extraction
+- [ ] Expanded template library (spine MRI, CT angiography, obstetric US)
+
+See [Known Issues](KNOWN_ISSUES.md) for current limitations, and the
+[project wiki](https://github.com/mustafamm072/radreport/wiki) for guides and
+API reference.
 
 ---
 

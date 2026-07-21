@@ -18,6 +18,7 @@ from pathlib import Path
 from . import (
     ReportParser, CriticalFindingsDetector, FHIRExporter,
     RecommendationExtractor, Deidentifier, ReportComparator,
+    TemplateMatcher, TEMPLATES,
 )
 
 _parser = ReportParser()
@@ -26,11 +27,18 @@ _extractor = RecommendationExtractor()
 _exporter = FHIRExporter()
 _deidentifier = Deidentifier()
 _comparator = ReportComparator()
+_matcher = TemplateMatcher()
 
 
 def _process(path: Path, modality, run_critical, run_recommend, as_fhir, patient_id,
-             run_deidentify=False):
-    """Return (ParsedReport, output_dict). output_dict is FHIR when as_fhir=True."""
+             run_deidentify=False, run_template=None):
+    """
+    Return (ParsedReport, output_dict, template_match).
+
+    output_dict is a FHIR resource when as_fhir=True, otherwise report.to_dict()
+    plus source_file. template_match is a TemplateMatch when run_template is set,
+    else None.
+    """
     text = path.read_text(encoding="utf-8")
 
     if run_deidentify:
@@ -47,12 +55,16 @@ def _process(path: Path, modality, run_critical, run_recommend, as_fhir, patient
     if run_recommend:
         report = _extractor.extract(report)
 
+    match = _matcher.match(report, template=run_template) if run_template else None
+
     if as_fhir:
-        return report, _exporter.export(report, patient_id=patient_id)
+        return report, _exporter.export(report, patient_id=patient_id), match
 
     d = report.to_dict()
     d["source_file"] = path.name
-    return report, d
+    if match is not None:
+        d["template"] = match.to_dict()
+    return report, d, match
 
 
 def _to_csv(rows: list[dict]) -> str:
@@ -118,9 +130,11 @@ examples:
   radreport reports/*.txt --critical --recommend --format csv -o batch.csv
   radreport report.txt --deidentify --critical
   radreport current.txt --compare prior.txt --modality CT
+  radreport report.txt --template ct_abdomen_pelvis
+  radreport report.txt --template            # auto-select template
 """,
     )
-    ap.add_argument("files", nargs="+", metavar="FILE",
+    ap.add_argument("files", nargs="*", metavar="FILE",
                     help="Report .txt file(s) to parse")
     ap.add_argument("--modality", "-m", metavar="MOD",
                     help="Imaging modality: CT, MRI, XR, US, NM, PET …")
@@ -134,6 +148,13 @@ examples:
                     help="Compare the input report against a PRIOR study .txt and "
                          "report interval change (new/increased/decreased/stable/"
                          "resolved). Requires a single input FILE; outputs JSON.")
+    ap.add_argument("--template", nargs="?", const="auto", metavar="NAME",
+                    help="Check report completeness against a structured report "
+                         "template. Give a template key (see --list-templates) or "
+                         "omit the value to auto-select. Adds a 'template' block to "
+                         "JSON output / completeness columns to CSV.")
+    ap.add_argument("--list-templates", action="store_true",
+                    help="List available report-template keys and exit")
     ap.add_argument("--fhir", "-f", action="store_true",
                     help="Export as FHIR R4 DiagnosticReport (implies --critical; not compatible with --format csv)")
     ap.add_argument("--patient-id", metavar="ID",
@@ -146,8 +167,20 @@ examples:
 
     args = ap.parse_args(argv)
 
+    if args.list_templates:
+        for key, tmpl in TEMPLATES.items():
+            print(f"{key}\t{tmpl.name}")
+        return
+
+    if not args.files:
+        ap.error("the following arguments are required: FILE")
+
     if args.fmt == "csv" and args.fhir:
         ap.error("--format csv is not compatible with --fhir")
+
+    if args.template and args.template != "auto" and args.template not in TEMPLATES:
+        ap.error(f"unknown template {args.template!r}; "
+                 f"available: {', '.join(TEMPLATES)} (or 'auto')")
 
     if args.compare:
         return _run_compare(ap, args)
@@ -165,11 +198,15 @@ examples:
             errors.append(f"not found: {f}")
             continue
         try:
-            report_obj, out = _process(p, args.modality, run_critical, run_recommend,
-                                        args.fhir, args.patient_id, args.deidentify)
+            report_obj, out, match = _process(
+                p, args.modality, run_critical, run_recommend,
+                args.fhir, args.patient_id, args.deidentify, args.template)
             if args.fmt == "csv":
                 flat = report_obj.to_flat_dict()
-                reports.append({"source_file": p.name, **flat})
+                row = {"source_file": p.name, **flat}
+                if match is not None:
+                    row.update(match.to_flat_dict())
+                reports.append(row)
             else:
                 json_rows.append(out)
         except Exception as e:

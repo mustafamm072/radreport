@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))  # repo root
 
 from radreport import (
     ReportParser, CriticalFindingsDetector, FHIRExporter, Deidentifier,
-    ReportComparator,
+    ReportComparator, TemplateMatcher,
 )
 
 # ── Sample report ──────────────────────────────────────────────────────────────
@@ -162,5 +162,20 @@ for c in change.comparisons:
     else:
         detail = f"{c.current_mm or c.prior_mm} mm"
     print(f"  [{c.status:9s}] {c.anatomy or 'unspecified':12s} {detail}")
+
+print("\n" + "=" * 60)
+print("STEP 5: TEMPLATE COMPLETENESS CHECK")
+print("=" * 60)
+
+# Reuse the parsed CT chest report from Step 1. Auto-selects the best template.
+matcher = TemplateMatcher()
+match = matcher.match(report)  # template="auto"
+
+print(f"\nTemplate      : {match.template_name} ({match.template_key})")
+print(f"Auto-selected : {match.auto_selected} "
+      f"(score {match.classification_score})")
+print(f"Completeness  : {match.completeness:.0%}")
+print(f"Covered       : {[i.key for i in match.covered_items]}")
+print(f"Missing (req.): {[i.key for i in match.missing_items]}")
 
 print("\nDone.")

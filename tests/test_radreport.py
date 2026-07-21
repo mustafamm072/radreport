@@ -8,6 +8,7 @@ import pytest
 from radreport import (
     ReportParser, CriticalFindingsDetector, FHIRExporter, RecommendationExtractor,
     Deidentifier, deidentify, ReportComparator, compare_reports,
+    TemplateMatcher, match_template,
 )
 
 # ---------------------------------------------------------------------------
@@ -1057,3 +1058,245 @@ class TestCompareCLI:
         with redirect_stderr(StringIO()):
             with pytest.raises(SystemExit):
                 main([a, b, "--compare", pri])
+
+
+# ---------------------------------------------------------------------------
+# Report template / completeness tests
+# ---------------------------------------------------------------------------
+
+class TestReportTemplates:
+
+    def setup_method(self):
+        self.parser = ReportParser()
+        self.matcher = TemplateMatcher()
+
+    def test_available_templates(self):
+        keys = self.matcher.available
+        for expected in ("chest_xr", "ct_chest", "ct_abdomen_pelvis", "ct_head", "mri_brain"):
+            assert expected in keys
+
+    def test_explicit_template_selection(self):
+        report = self.parser.parse(ABDOMINAL_CT, modality="CT")
+        match = self.matcher.match(report, template="ct_abdomen_pelvis")
+        assert match.template_key == "ct_abdomen_pelvis"
+        assert match.auto_selected is False
+        assert match.classification_score is None
+
+    def test_unknown_template_raises(self):
+        report = self.parser.parse(ABDOMINAL_CT, modality="CT")
+        with pytest.raises(ValueError):
+            self.matcher.match(report, template="does_not_exist")
+
+    def test_auto_selects_abdomen_pelvis(self):
+        report = self.parser.parse(ABDOMINAL_CT, modality="CT")
+        match = self.matcher.match(report)  # auto
+        assert match.template_key == "ct_abdomen_pelvis"
+        assert match.auto_selected is True
+        assert match.classification_score is not None and match.classification_score > 0
+
+    def test_auto_selects_mri_brain(self):
+        report = self.parser.parse(MRI_BRAIN_REPORT, modality="MRI")
+        match = self.matcher.match(report)
+        assert match.template_key == "mri_brain"
+
+    def test_auto_selects_chest_xr(self):
+        report = self.parser.parse(NORMAL_XRAY_REPORT, modality="XR")
+        match = self.matcher.match(report)
+        assert match.template_key == "chest_xr"
+
+    def test_classify_helper(self):
+        report = self.parser.parse(NORMAL_XRAY_REPORT, modality="XR")
+        assert self.matcher.classify(report) == "chest_xr"
+
+    def test_covered_items_recorded_with_keyword(self):
+        report = self.parser.parse(ABDOMINAL_CT, modality="CT")
+        match = self.matcher.match(report, template="ct_abdomen_pelvis")
+        covered = {i.key: i.matched_keyword for i in match.covered_items}
+        assert "liver" in covered
+        assert covered["liver"] is not None
+        # Every covered item must record which keyword matched (auditability).
+        for i in match.covered_items:
+            assert i.matched_keyword is not None
+            assert i.covered is True
+
+    def test_missing_items_are_required_and_uncovered(self):
+        report = self.parser.parse(ABDOMINAL_CT, modality="CT")
+        match = self.matcher.match(report, template="ct_abdomen_pelvis")
+        # ABDOMINAL_CT never mentions pancreas or spleen.
+        missing_keys = {i.key for i in match.missing_items}
+        assert "pancreas" in missing_keys
+        assert "spleen" in missing_keys
+        for i in match.missing_items:
+            assert i.required is True
+            assert i.covered is False
+
+    def test_optional_item_not_counted_as_missing(self):
+        # A report with no free-fluid mention: free_fluid is optional, so it is
+        # never a "missing" (completeness-reducing) item.
+        report = self.parser.parse(ABDOMINAL_CT, modality="CT")
+        match = self.matcher.match(report, template="ct_abdomen_pelvis")
+        missing_keys = {i.key for i in match.missing_items}
+        assert "appendix" not in missing_keys      # optional
+        assert "pelvic_organs" not in missing_keys  # optional
+
+    def test_completeness_is_fraction_of_required(self):
+        report = self.parser.parse(ABDOMINAL_CT, modality="CT")
+        match = self.matcher.match(report, template="ct_abdomen_pelvis")
+        required = [i for i in match.items if i.required]
+        covered_required = [i for i in required if i.covered]
+        assert match.completeness == round(len(covered_required) / len(required), 3)
+        assert 0.0 <= match.completeness <= 1.0
+
+    def test_is_complete_flag(self):
+        report = self.parser.parse(ABDOMINAL_CT, modality="CT")
+        match = self.matcher.match(report, template="ct_abdomen_pelvis")
+        assert match.is_complete == (len(match.missing_items) == 0)
+
+    def test_to_dict_shape(self):
+        report = self.parser.parse(NORMAL_XRAY_REPORT, modality="XR")
+        d = self.matcher.match(report, template="chest_xr").to_dict()
+        for key in ("template_key", "template_name", "auto_selected",
+                    "completeness", "is_complete", "missing_item_keys", "items"):
+            assert key in d
+        assert isinstance(d["items"], list)
+        assert isinstance(d["missing_item_keys"], list)
+
+    def test_to_flat_dict_shape(self):
+        report = self.parser.parse(ABDOMINAL_CT, modality="CT")
+        flat = self.matcher.match(report, template="ct_abdomen_pelvis").to_flat_dict()
+        assert flat["template_key"] == "ct_abdomen_pelvis"
+        assert isinstance(flat["template_completeness"], float)
+        assert flat["template_missing_count"] == len(
+            self.matcher.match(report, template="ct_abdomen_pelvis").missing_items)
+        assert isinstance(flat["template_missing_items"], str)
+
+    def test_indication_only_mention_does_not_count(self):
+        # A structure named only in the indication/history must NOT count as
+        # addressed in the findings.
+        text = (
+            "INDICATION: History of liver disease and pancreatic mass.\n\n"
+            "FINDINGS:\nHeart: Normal.\n\nIMPRESSION: Normal cardiac exam.\n"
+        )
+        report = self.parser.parse(text, modality="CT")
+        match = self.matcher.match(report, template="ct_abdomen_pelvis")
+        covered_keys = {i.key for i in match.covered_items}
+        assert "liver" not in covered_keys
+        assert "pancreas" not in covered_keys
+
+    def test_match_template_convenience_wrapper(self):
+        match = match_template(ABDOMINAL_CT, template="auto", modality="CT")
+        assert match.template_key == "ct_abdomen_pelvis"
+
+    def test_custom_template_registry(self):
+        from radreport import ReportTemplate, TemplateItem
+        custom = ReportTemplate(
+            key="mini",
+            name="Mini",
+            modalities=("CT",),
+            classifier_keywords=("liver",),
+            items=(TemplateItem("liver", "Liver", ("liver",)),),
+        )
+        matcher = TemplateMatcher(templates={"mini": custom})
+        assert matcher.available == ["mini"]
+        report = self.parser.parse(ABDOMINAL_CT, modality="CT")
+        match = matcher.match(report, template="mini")
+        assert match.completeness == 1.0
+
+    def test_matcher_does_not_mutate_global_registry(self):
+        from radreport import TEMPLATES
+        before = set(TEMPLATES.keys())
+        matcher = TemplateMatcher()
+        matcher.templates["injected"] = None
+        assert set(TEMPLATES.keys()) == before
+
+
+class TestTemplateCLI:
+
+    def setup_method(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+
+    def _write(self, name, text):
+        from pathlib import Path
+        p = Path(self.tmp) / name
+        p.write_text(text, encoding="utf-8")
+        return str(p)
+
+    def test_cli_list_templates(self):
+        from io import StringIO
+        from contextlib import redirect_stdout
+        from radreport.cli import main
+
+        buf = StringIO()
+        with redirect_stdout(buf):
+            main(["--list-templates"])
+        out = buf.getvalue()
+        assert "ct_abdomen_pelvis" in out
+        assert "mri_brain" in out
+
+    def test_cli_template_json(self):
+        import json
+        from io import StringIO
+        from contextlib import redirect_stdout
+        from radreport.cli import main
+
+        f = self._write("report.txt", ABDOMINAL_CT)
+        buf = StringIO()
+        with redirect_stdout(buf):
+            main([f, "--template", "ct_abdomen_pelvis"])
+        result = json.loads(buf.getvalue())
+        assert result["template"]["template_key"] == "ct_abdomen_pelvis"
+        assert "completeness" in result["template"]
+
+    def test_cli_template_auto(self):
+        import json
+        from io import StringIO
+        from contextlib import redirect_stdout
+        from radreport.cli import main
+
+        f = self._write("report.txt", ABDOMINAL_CT)
+        buf = StringIO()
+        with redirect_stdout(buf):
+            main([f, "--template", "--modality", "CT"])
+        result = json.loads(buf.getvalue())
+        assert result["template"]["auto_selected"] is True
+        assert result["template"]["template_key"] == "ct_abdomen_pelvis"
+
+    def test_cli_template_csv_columns(self):
+        import csv
+        from io import StringIO
+        from contextlib import redirect_stdout
+        from radreport.cli import main
+
+        f = self._write("report.txt", ABDOMINAL_CT)
+        buf = StringIO()
+        with redirect_stdout(buf):
+            main([f, "--template", "ct_abdomen_pelvis", "--format", "csv"])
+        rows = list(csv.DictReader(buf.getvalue().splitlines()))
+        assert len(rows) == 1
+        assert rows[0]["template_key"] == "ct_abdomen_pelvis"
+        assert "template_completeness" in rows[0]
+        assert "template_missing_items" in rows[0]
+
+    def test_cli_unknown_template_exits(self):
+        from io import StringIO
+        from contextlib import redirect_stderr
+        from radreport.cli import main
+
+        f = self._write("report.txt", ABDOMINAL_CT)
+        with redirect_stderr(StringIO()):
+            with pytest.raises(SystemExit):
+                main([f, "--template", "bogus"])
+
+    def test_cli_no_template_flag_omits_block(self):
+        import json
+        from io import StringIO
+        from contextlib import redirect_stdout
+        from radreport.cli import main
+
+        f = self._write("report.txt", ABDOMINAL_CT)
+        buf = StringIO()
+        with redirect_stdout(buf):
+            main([f])
+        result = json.loads(buf.getvalue())
+        assert "template" not in result

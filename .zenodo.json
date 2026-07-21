@@ -13,7 +13,9 @@
     "de-identification",
     "PHI",
     "HIPAA",
-    "DICOM"
+    "DICOM",
+    "interval change",
+    "structured reporting"
   ],
   "creators": [
     {

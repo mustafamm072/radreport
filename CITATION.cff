@@ -25,6 +25,7 @@ keywords:
   - NLP
   - de-identification
   - PHI
+  - structured reporting
 license: MIT
-version: 0.5.0
-date-released: "2026-07-14"
+version: 0.6.0
+date-released: "2026-07-20"
