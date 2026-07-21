@@ -204,6 +204,96 @@ class ComparisonResult:
 
 
 @dataclass
+class TemplateItemResult:
+    """
+    The coverage result for a single checklist item of a report template —
+    i.e. whether the report actually addressed this anatomic structure or
+    evaluation point.
+
+    `matched_keyword` records which of the item's keywords triggered the match,
+    so the decision is fully auditable.
+    """
+    key: str
+    label: str
+    covered: bool
+    required: bool = True
+    matched_keyword: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "covered": self.covered,
+            "required": self.required,
+            "matched_keyword": self.matched_keyword,
+        }
+
+
+@dataclass
+class TemplateMatch:
+    """
+    Output of TemplateMatcher.match(). A completeness assessment of a report
+    against a structured report template for its study type.
+
+    Each `TemplateItemResult` records whether an expected anatomic structure /
+    evaluation point was addressed. `completeness` is the fraction of *required*
+    items that were covered — a rule-based, auditable quality signal for QA
+    dashboards and research-cohort validation.
+    """
+    template_key: str
+    template_name: str
+    auto_selected: bool
+    items: list["TemplateItemResult"] = field(default_factory=list)
+    classification_score: Optional[float] = None
+
+    @property
+    def covered_items(self) -> list["TemplateItemResult"]:
+        return [i for i in self.items if i.covered]
+
+    @property
+    def missing_items(self) -> list["TemplateItemResult"]:
+        """Required items the report did not address — the completeness gaps."""
+        return [i for i in self.items if i.required and not i.covered]
+
+    @property
+    def completeness(self) -> float:
+        """
+        Fraction of required items that were covered, in [0.0, 1.0].
+        A template with no required items is trivially complete (1.0).
+        """
+        required = [i for i in self.items if i.required]
+        if not required:
+            return 1.0
+        covered = sum(1 for i in required if i.covered)
+        return round(covered / len(required), 3)
+
+    @property
+    def is_complete(self) -> bool:
+        return not self.missing_items
+
+    def to_dict(self) -> dict:
+        return {
+            "template_key": self.template_key,
+            "template_name": self.template_name,
+            "auto_selected": self.auto_selected,
+            "classification_score": self.classification_score,
+            "completeness": self.completeness,
+            "is_complete": self.is_complete,
+            "missing_item_keys": [i.key for i in self.missing_items],
+            "items": [i.to_dict() for i in self.items],
+        }
+
+    def to_flat_dict(self) -> dict[str, Any]:
+        """Flat key/value representation, suitable for merging into a CSV row."""
+        return {
+            "template_key": self.template_key,
+            "template_completeness": self.completeness,
+            "template_missing_count": len(self.missing_items),
+            "template_missing_items": ";".join(i.key for i in self.missing_items),
+        }
+
+
+@dataclass
 class CriticalFinding:
     """A flagged critical / urgent finding."""
     term: str               # The keyword that triggered the flag

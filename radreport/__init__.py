@@ -30,6 +30,13 @@ from .recommendation_extractor import RecommendationExtractor
 from .fhir_exporter import FHIRExporter
 from .deidentifier import Deidentifier, deidentify
 from .report_comparator import ReportComparator, compare_reports
+from .templates import (
+    TemplateMatcher,
+    match_template,
+    ReportTemplate,
+    TemplateItem,
+    TEMPLATES,
+)
 from .report_schema import (
     ParsedReport,
     ReportSection,
@@ -41,9 +48,11 @@ from .report_schema import (
     DeidentificationResult,
     FindingComparison,
     ComparisonResult,
+    TemplateItemResult,
+    TemplateMatch,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __all__ = [
     "ReportParser",
     "CriticalFindingsDetector",
@@ -53,6 +62,11 @@ __all__ = [
     "deidentify",
     "ReportComparator",
     "compare_reports",
+    "TemplateMatcher",
+    "match_template",
+    "ReportTemplate",
+    "TemplateItem",
+    "TEMPLATES",
     "ParsedReport",
     "ReportSection",
     "Finding",
@@ -63,5 +77,7 @@ __all__ = [
     "DeidentificationResult",
     "FindingComparison",
     "ComparisonResult",
+    "TemplateItemResult",
+    "TemplateMatch",
     "__version__",
 ]
